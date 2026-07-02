@@ -26,14 +26,14 @@
 #                   escalating to Emmett instead of retrying again (default 4)
 set -euo pipefail
 
-ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CAP="${CAP:-2}"
 BUDGET="${BUDGET:-0.50}"
 WORKER_BUDGET="${WORKER_BUDGET:-10.00}"
 CHECKER_BUDGET="${CHECKER_BUDGET:-3.00}"
 CHECKER_LIMIT="${CHECKER_LIMIT:-4}"
 WORKER_LIMIT="${WORKER_LIMIT:-4}"
-BRIEF_FILE="$ORCH/orchestrator-brief.md"
+BRIEF_FILE="$ORCH/briefs/orchestrator-brief.md"
 LEDGER="$ORCH/ledger.md"
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
@@ -57,16 +57,16 @@ yml() { sed -nE "s/^$2:[[:space:]]*(.+)/\1/p" "$1" \
           | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//' | head -1; }
 
 # 1. Prune stale entries so the live count is accurate -------------------------
-WORKER_LIMIT="$WORKER_LIMIT" "$ORCH/ledger-prune.sh" || true
+WORKER_LIMIT="$WORKER_LIMIT" "$ORCH/bin/ledger-prune.sh" || true
 
 # 1b. Reclaim disk: remove worktrees whose work is merged/closed and already
 # captured on GitHub (a spent derivative). Conservative — never touches a live
 # in-flight worktree or any local-only (uncommitted/unpushed) state. Honors
 # --dry-run so a planning pass reports removals without touching the filesystem.
 if [ "$DRY" = 1 ]; then
-  "$ORCH/worktree-prune.sh" --auto --dry-run || true
+  "$ORCH/bin/worktree-prune.sh" --auto --dry-run || true
 else
-  "$ORCH/worktree-prune.sh" --auto || true
+  "$ORCH/bin/worktree-prune.sh" --auto || true
 fi
 
 # 2. Onboarded repos — only these are in the loop (they have a manifest) --------
@@ -142,9 +142,9 @@ print(len(verdicts) - (last_handoff + 1))
     fi
     if [ "$DRY" = 1 ]; then
       echo "  would check: $slug PR #$pr (closes #$issue)"
-      "$ORCH/launch-checker.sh" "$slug" "$pr" --budget "$CHECKER_BUDGET" --dry-run >/dev/null && echo "    (dry-run command assembled OK)"
+      "$ORCH/bin/launch-checker.sh" "$slug" "$pr" --budget "$CHECKER_BUDGET" --dry-run >/dev/null && echo "    (dry-run command assembled OK)"
     else
-      "$ORCH/launch-checker.sh" "$slug" "$pr" --budget "$CHECKER_BUDGET"
+      "$ORCH/bin/launch-checker.sh" "$slug" "$pr" --budget "$CHECKER_BUDGET"
     fi
   done <<< "$PRS"
 done
@@ -164,7 +164,7 @@ fi
 # 5. Compose the worker-dispatch brief + invocation ---------------------------
 HOOK="$ORCH/host/hooks/session-start-digest.sh"
 SETTINGS_JSON="$(HOOK="$HOOK" python3 -c 'import json,os; print(json.dumps({"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":os.environ["HOOK"]}]}]}}))')"
-DISPATCH="$ORCH/launch-worker.sh"
+DISPATCH="$ORCH/bin/launch-worker.sh"
 
 if [ "$DRY" = 1 ]; then
   DISPATCH_LINE="$DISPATCH <repo-slug> <issue#> --budget $WORKER_BUDGET --dry-run"

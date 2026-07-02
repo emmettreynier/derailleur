@@ -9,7 +9,7 @@
 # This is the wake-time housekeeping that the worker's `status` field anticipates
 # (Phase 4): workers don't self-update the ledger; the orchestrator prunes here.
 set -euo pipefail
-ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LEDGER="${LEDGER:-$ORCH/ledger.md}"
 [ -f "$LEDGER" ] || { echo "ledger-prune: no ledger at $LEDGER (nothing to do)"; exit 0; }
 

@@ -16,7 +16,7 @@
 #   DONE_DAYS=14 ./launch-orchestrator.sh        # widen the Done window
 set -euo pipefail
 
-ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOK="$ORCH/host/hooks/session-start-digest.sh"
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && { DRY_RUN=1; shift; }

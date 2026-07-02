@@ -38,9 +38,9 @@ Split out of `project-management-v2/orchestrator`
 1. Clone this repo.
 2. Install the dependencies above.
 3. `gh auth login`.
-4. `./install.sh` — dep-checks (`gh`/`jq`/`claude`/`python3`/`git`), asserts the
+4. `./bin/install.sh` — dep-checks (`gh`/`jq`/`claude`/`python3`/`git`), asserts the
    in-repo host hooks are executable, creates `logs/` + `state/`. Idempotent.
-5. Verify: `claude --version`, then a dry run: `./launch-orchestrator.sh --dry-run`.
+5. Verify: `claude --version`, then a dry run: `./bin/launch-orchestrator.sh --dry-run`.
 
 This does **not** register anything in `~/.claude/` — the host hooks are passed to
 each dispatch by in-repo path, so your normal interactive Claude Code sessions
@@ -52,7 +52,7 @@ machine-local.
 
 1. Choose an **archetype**: `git-native` (preferred — repo is git-only, data is a
    symlink) or `dropbox-native` (coauthored/legacy — repo lives in Dropbox).
-2. `./new-project.sh <owner/repo> [--archetype …] [--clone …] [--worktrees …]` —
+2. `./bin/new-project.sh <owner/repo> [--archetype …] [--clone …] [--worktrees …]` —
    creates the label set, ensures an out-of-Dropbox working clone + worktrees dir,
    and scaffolds `projects/<repo>.yml`. Idempotent.
 3. Fill the scaffolded manifest's TODOs — board `project`, `raw_resolved`, and
@@ -63,7 +63,7 @@ machine-local.
 6. **Shared repos:** get coauthor buy-in before enabling `main` branch protection;
    otherwise rely on the agent's deny-hook for "no pushes to `main`."
 7. Author one well-specified issue (clear goal + acceptance criteria + defined
-   outputs) and dry-run a worker by hand: `./launch-worker.sh <slug> <issue#> --dry-run`.
+   outputs) and dry-run a worker by hand: `./bin/launch-worker.sh <slug> <issue#> --dry-run`.
 
 A few steps are irreducibly manual (not CLI-scriptable): GitHub board view
 membership/filters, Dropbox "Available offline" pinning, `gh`/Dropbox
@@ -75,9 +75,9 @@ Once you trust a project's setup, you can let the orchestrator run itself on a
 timer instead of triggering it by hand:
 
 ```bash
-./schedule.sh install       # registers the launchd timer, ships in plan-only mode
-./schedule.sh run --dry-run # trigger one cycle by hand — free, dispatches nothing
-./schedule.sh live          # flip the switch that lets scheduled runs actually spend
+./bin/schedule.sh install       # registers the launchd timer, ships in plan-only mode
+./bin/schedule.sh run --dry-run # trigger one cycle by hand — free, dispatches nothing
+./bin/schedule.sh live          # flip the switch that lets scheduled runs actually spend
 ```
 
 It runs night-heavy (roughly 8pm/11pm/2am/5am/8am on weeknights, jittered) so it
@@ -90,11 +90,11 @@ backoff, `pmset` wake chain, concurrency cap).
 ### Run one orchestration pass by hand
 
 ```bash
-./orchestrator-cycle.sh              # real pass: prune -> dispatch checkers -> dispatch workers
-./orchestrator-cycle.sh --dry-run    # plan only — nothing dispatched, nothing spent
+./bin/orchestrator-cycle.sh              # real pass: prune -> dispatch checkers -> dispatch workers
+./bin/orchestrator-cycle.sh --dry-run    # plan only — nothing dispatched, nothing spent
 ```
 
-Tunable by env var, e.g. `WORKER_BUDGET=6 ./orchestrator-cycle.sh`:
+Tunable by env var, e.g. `WORKER_BUDGET=6 ./bin/orchestrator-cycle.sh`:
 
 | Var | Default | What it does |
 |---|---|---|
@@ -111,33 +111,33 @@ Bypasses the cycle's intake gate — use when you've already decided. Both reuse
 worktree idempotently and run detached by default:
 
 ```bash
-./launch-worker.sh  <repo-slug> <issue#> [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
-./launch-checker.sh <repo-slug> <pr#>    [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
+./bin/launch-worker.sh  <repo-slug> <issue#> [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
+./bin/launch-checker.sh <repo-slug> <pr#>    [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
 
 # e.g. land a resume issue with extra headroom, watched live:
-./launch-worker.sh solar-income 1 --budget 5 --foreground
+./bin/launch-worker.sh solar-income 1 --budget 5 --foreground
 ```
 
 ### Reclaim worktree disk
 
 ```bash
-./worktree-prune.sh                  # interactive: list every worktree (disk + status), pick which to remove
-./worktree-prune.sh --auto           # non-interactive: remove merged+clean worktrees, report the rest
-./worktree-prune.sh --auto --dry-run # report only, remove nothing
-./worktree-prune.sh --auto --force   # also drop worktrees blocked solely by stray untracked files
+./bin/worktree-prune.sh                  # interactive: list every worktree (disk + status), pick which to remove
+./bin/worktree-prune.sh --auto           # non-interactive: remove merged+clean worktrees, report the rest
+./bin/worktree-prune.sh --auto --dry-run # report only, remove nothing
+./bin/worktree-prune.sh --auto --force   # also drop worktrees blocked solely by stray untracked files
 ```
 
 ### Day-to-day scheduler commands
 
 ```bash
-./schedule.sh status        # timer state, current mode, next wake, usage gate, recent log
-./schedule.sh live          # let scheduled runs dispatch for real (spend)
-./schedule.sh plan-only     # back to no-spend (runs still happen, just plan)
-./schedule.sh run           # run one cycle right now (respects the current mode)
-./schedule.sh run --dry-run # run one cycle right now in plan-only mode (free)
-./schedule.sh pause         # stop firing entirely (e.g. while away) — instant, reversible
-./schedule.sh resume        # start firing again after a pause
-./schedule.sh uninstall     # remove completely (unregister timer, cancel wakes)
+./bin/schedule.sh status        # timer state, current mode, next wake, usage gate, recent log
+./bin/schedule.sh live          # let scheduled runs dispatch for real (spend)
+./bin/schedule.sh plan-only     # back to no-spend (runs still happen, just plan)
+./bin/schedule.sh run           # run one cycle right now (respects the current mode)
+./bin/schedule.sh run --dry-run # run one cycle right now in plan-only mode (free)
+./bin/schedule.sh pause         # stop firing entirely (e.g. while away) — instant, reversible
+./bin/schedule.sh resume        # start firing again after a pause
+./bin/schedule.sh uninstall     # remove completely (unregister timer, cancel wakes)
 ```
 
 ### How to read the results
@@ -155,21 +155,27 @@ merge, or `needs-definition`.
 derailleur/
 ├── design.md                    Full design doc — architecture, safety model, build history
 ├── projects/*.yml                Per-project manifests (the onboarding unit)
-├── *-brief.md                    Role protocol briefs (worker / checker / orchestrator)
+├── briefs/                       Role protocol briefs
+│   ├── worker-brief.md
+│   ├── checker-brief.md
+│   └── orchestrator-brief.md
 ├── templates/pr-results-summary.md   The results-summary PR template workers fill in
 ├── host/hooks/                   PreToolUse / Stop / SessionStart hooks (the safety layer)
 ├── host/LaunchAgents/            launchd plist template for the scheduled loop
-├── install.sh                    One-time host bootstrap
-├── new-project.sh                Per-project onboarding
-├── setup-labels.sh               (Re-)creates the label set on a repo
-├── orchestrator-cycle.sh         One full dispatch pass (prune -> checkers -> workers)
-├── run-cycle.sh / schedule.sh    Scheduled-loop entrypoint + launchd/pmset management
-├── launch-worker.sh              Dispatch a headless worker on one issue
-├── launch-checker.sh             Dispatch a headless checker on one PR
-├── launch-orchestrator.sh        Boot an (interactive or scheduled) orchestrator session
-├── dispatch-common.sh            Shared post-run helpers, sourced by both launchers
-├── ledger-prune.sh / worktree-prune.sh   Housekeeping run at the start of every cycle
-├── board-digest.sh               Deterministic board-state report (no LLM)
+├── bin/                          All shell entrypoints (invoke as ./bin/<script>.sh)
+│   ├── install.sh                One-time host bootstrap
+│   ├── new-project.sh             Per-project onboarding
+│   ├── setup-labels.sh            (Re-)creates the label set on a repo
+│   ├── orchestrator-cycle.sh      One full dispatch pass (prune -> checkers -> workers)
+│   ├── run-cycle.sh               Scheduled-loop entrypoint (launchd/pmset wiring)
+│   ├── schedule.sh                Install/manage the launchd schedule
+│   ├── launch-worker.sh           Dispatch a headless worker on one issue
+│   ├── launch-checker.sh          Dispatch a headless checker on one PR
+│   ├── launch-orchestrator.sh     Boot an (interactive or scheduled) orchestrator session
+│   ├── dispatch-common.sh         Shared post-run helpers, sourced by both launchers
+│   ├── ledger-prune.sh            Drop stale ledger entries at the start of every cycle
+│   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees
+│   └── board-digest.sh            Deterministic board-state report (no LLM)
 ├── ledger.md, logs/, state/      Machine-local runtime state (gitignored)
 └── diagrams/                     Supporting diagrams
 ```
@@ -181,7 +187,7 @@ derailleur/
   build history. Read this before changing dispatch logic or the safety model.
 - **[CLAUDE.md](CLAUDE.md)** — conventions and gotchas for Claude Code sessions
   working in this repo.
-- `*-brief.md` — the exact protocol each role (worker/checker/orchestrator) is given.
+- `briefs/*-brief.md` — the exact protocol each role (worker/checker/orchestrator) is given.
 
 ## License
 

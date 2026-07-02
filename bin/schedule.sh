@@ -31,7 +31,7 @@
 # ever lapses. Wake != run: pmset wakes the Mac ~ a slot time; launchd then fires the job.
 set -uo pipefail
 
-ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LABEL="com.emmett.orchestrator"
 PLIST_SRC="$ORCH/host/LaunchAgents/$LABEL.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -207,10 +207,10 @@ cmd_status() {
 cmd_run() {
   if [ "${1:-}" = "--dry-run" ]; then
     echo "manual planning cycle (inline, no spend)…"
-    exec "$ORCH/run-cycle.sh" --dry-run --no-arm
+    exec "$ORCH/bin/run-cycle.sh" --dry-run --no-arm
   fi
   echo "running one cycle now (inline, immediate — no jitter; respects current mode)…"
-  exec "$ORCH/run-cycle.sh" --no-arm
+  exec "$ORCH/bin/run-cycle.sh" --no-arm
 }
 
 case "${1:-}" in

@@ -33,7 +33,7 @@
 #              files are in the way — still NEVER when there are uncommitted tracked
 #              edits or unpushed commits. (Interactive mode confirms per-item instead.)
 set -euo pipefail
-ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LEDGER="${LEDGER:-$ORCH/ledger.md}"
 
 MODE=interactive; DRY=0; FORCE=0

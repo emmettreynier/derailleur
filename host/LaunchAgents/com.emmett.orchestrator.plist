@@ -33,7 +33,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>@ORCH@/run-cycle.sh</string>
+    <string>@ORCH@/bin/run-cycle.sh</string>
     <string>--jitter</string>
   </array>
 

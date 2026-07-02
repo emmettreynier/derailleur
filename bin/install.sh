@@ -25,7 +25,7 @@
 # Usage: ./install.sh
 set -euo pipefail
 
-ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # repo root
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repo root
 
 note() { printf '%s\n' "$*"; }
 warn() { printf '⚠ %s\n' "$*" >&2; }
@@ -62,7 +62,7 @@ for f in \
   "$ORCH"/host/hooks/raw-data-guard.py \
   "$ORCH"/host/hooks/worker-stop-guard.sh \
   "$ORCH"/host/hooks/session-start-digest.sh \
-  "$ORCH"/*.sh
+  "$ORCH"/bin/*.sh
 do
   case "$f" in */dispatch-common.sh) continue ;; esac
   chmod_ok "$f"
@@ -81,10 +81,10 @@ cat <<EOF
 orchestrator host bootstrap complete.
 
 Next, as needed:
-  1. Onboard a project:        ./new-project.sh <owner/repo>
-  2. Install the night timer:  ./schedule.sh install   (ships PLAN-ONLY)
-                               then ./schedule.sh live  when ready to spend
-  3. Sanity check:             ./board-digest.sh   (reads the board)
+  1. Onboard a project:        ./bin/new-project.sh <owner/repo>
+  2. Install the night timer:  ./bin/schedule.sh install   (ships PLAN-ONLY)
+                               then ./bin/schedule.sh live  when ready to spend
+  3. Sanity check:             ./bin/board-digest.sh   (reads the board)
 
 See README.md for the full host + per-project checklists.
 EOF

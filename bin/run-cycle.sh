@@ -33,7 +33,7 @@
 #   ORCH_DRY=1   force plan-only for this run (a manual override of the toggle)
 set -uo pipefail   # NOT -e: a failing cycle must still arm the next wake + log
 
-ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # 1. PATH — make the toolchain resolvable under launchd's stripped env. Portable:
 # newest python.org framework via glob, both homebrew arches, ~/.local/bin for claude.
@@ -84,7 +84,7 @@ fi
 # 3 (first): keep the wake chain alive BEFORE anything that might exit early, so a
 # deferred or failing cycle never strands the schedule. Best-effort; needs no spend.
 if [ "$ARM" = 1 ]; then
-  "$ORCH/schedule.sh" arm-wake >>"$CYCLE_LOG" 2>&1 \
+  "$ORCH/bin/schedule.sh" arm-wake >>"$CYCLE_LOG" 2>&1 \
     && say "armed next wake" || say "warn: could not arm next wake (chain relies on launchd repeat bootstrap)"
 fi
 
@@ -120,7 +120,7 @@ RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/orch-cycle.XXXXXX")"
 # bash 3.2 (macOS /bin/bash, which the plist uses) errors on "${ARGS[@]}" when ARGS is
 # empty under set -u — the live-mode case (no --dry-run). The +expansion is the portable
 # guard. (Same bash-3.2 empty-array landmine documented for worktree-prune.)
-"$ORCH/orchestrator-cycle.sh" ${ARGS[@]+"${ARGS[@]}"} >"$RUN_LOG" 2>&1
+"$ORCH/bin/orchestrator-cycle.sh" ${ARGS[@]+"${ARGS[@]}"} >"$RUN_LOG" 2>&1
 rc=$?
 cat "$RUN_LOG" >>"$CYCLE_LOG"
 say "cycle end (rc=$rc)"
@@ -128,7 +128,7 @@ say "cycle end (rc=$rc)"
 # The headless orchestrator session itself runs on the same subscription and can hit
 # the limit; its result lands only in the cycle log (workers/checkers self-record via
 # finalize_dispatch). Reuse the shared parser so the gate logic is identical everywhere.
-source "$ORCH/dispatch-common.sh"
+source "$ORCH/bin/dispatch-common.sh"
 record_usage_reset "$RUN_LOG"
 rm -f "$RUN_LOG"
 POST_RESET="$(cat "$RESET_FILE" 2>/dev/null || true)"

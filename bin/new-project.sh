@@ -25,7 +25,7 @@
 #   ~/orchestrator/worktrees/<slug>.
 set -euo pipefail
 
-ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # .../orchestrator
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # .../orchestrator
 
 note() { printf '%s\n' "$*"; }
 warn() { printf '⚠ %s\n' "$*" >&2; }
@@ -58,12 +58,12 @@ esac
 : "${CLONE:=$HOME/projects/$SLUG}"
 : "${WORKTREES:=$HOME/orchestrator/worktrees/$SLUG}"
 
-command -v gh  >/dev/null 2>&1 || die "gh not found — run install.sh first."
-command -v git >/dev/null 2>&1 || die "git not found — run install.sh first."
+command -v gh  >/dev/null 2>&1 || die "gh not found — run bin/install.sh first."
+command -v git >/dev/null 2>&1 || die "git not found — run bin/install.sh first."
 
 # --- 1. labels ----------------------------------------------------------------
 note "==> labels"
-"$ORCH/setup-labels.sh" "$OWNER_REPO"
+"$ORCH/bin/setup-labels.sh" "$OWNER_REPO"
 
 # --- 2. working clone (out of Dropbox) ---------------------------------------
 note "==> working clone: $CLONE"
@@ -130,5 +130,5 @@ Before the first real dispatch:
   1. Edit $MANIFEST — set 'project', 'raw_resolved', and confirm paths (TODOs above).
   2. Add the repo to the board + "Needs Me" view (GitHub Projects UI — manual).
   3. dropbox-native only: pin the raw data "Available offline" in Dropbox.
-  4. Dry-run a worker:  ./launch-worker.sh $SLUG <issue#> --dry-run
+  4. Dry-run a worker:  ./bin/launch-worker.sh $SLUG <issue#> --dry-run
 EOF

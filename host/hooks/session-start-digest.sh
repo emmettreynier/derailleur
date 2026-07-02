@@ -13,7 +13,7 @@ set -euo pipefail
 [ "${ORCHESTRATOR:-}" = "1" ] || exit 0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIGEST_SH="$HERE/../../board-digest.sh"
+DIGEST_SH="$HERE/../../bin/board-digest.sh"
 
 if digest="$("$DIGEST_SH" 2>&1)"; then
   :

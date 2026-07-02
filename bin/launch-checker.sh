@@ -19,10 +19,10 @@
 set -euo pipefail
 
 # --- locate self + hub repo ---------------------------------------------------
-ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # .../orchestrator
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # .../orchestrator
 HOOK="$ORCH/host/hooks/raw-data-guard.py"
-BRIEF_FILE="$ORCH/checker-brief.md"
-source "$ORCH/dispatch-common.sh"   # classify_result / finalize_dispatch
+BRIEF_FILE="$ORCH/briefs/checker-brief.md"
+source "$ORCH/bin/dispatch-common.sh"   # classify_result / finalize_dispatch
 
 # Render a brief .md file into a system-prompt string: strip the leading HTML-comment
 # header, then substitute every {{TOKEN}} from the matching BRIEF_<TOKEN> env var.

@@ -53,7 +53,7 @@ PY
 # AFTER you've hit the wall (no way to query it ahead of time). Unparseable -> assume a
 # conservative full 5h window. Keeps the LATER of any existing marker and this one.
 record_usage_reset() {
-  local orch; orch="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local orch; orch="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   mkdir -p "$orch/state"
   python3 - "$1" "$orch/state/usage-reset" <<'PY' 2>/dev/null || true
 import re, sys, time

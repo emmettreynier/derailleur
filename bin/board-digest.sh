@@ -17,7 +17,7 @@ PROJECT=3
 OWNER="@me"
 PR_OWNER="emmettreynier"
 DONE_DAYS="${DONE_DAYS:-7}"
-ORCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LEDGER="$ORCH_DIR/ledger.md"
 
 command -v gh >/dev/null  || { echo "board-digest: gh not found" >&2; exit 1; }
