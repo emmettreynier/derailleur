@@ -11,7 +11,7 @@
 #   3. create the worktrees dir the launchers add into
 #   4. scaffold projects/<slug>.yml         (skipped if it exists)
 #
-# What it does NOT do (irreducibly manual — see SETUP.md):
+# What it does NOT do (irreducibly manual — see README.md):
 #   - add the repo to the board + "Needs Me" view (GitHub Projects UI)
 #   - pin raw data "Available offline" (dropbox-native only)
 #   - coauthor buy-in for any shared-repo branch protection

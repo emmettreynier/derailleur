@@ -1,6 +1,6 @@
 # Orchestrator — Design
 
-[Home](README.md) · [Setup](SETUP.md)
+[Home](README.md)
 
 ---
 
@@ -272,7 +272,7 @@ To make the machine-local pieces reproducible, their canonical copies live **in 
 
 - **`install.sh`** — host bootstrap: symlinks hooks/skills/plist into `~/.claude/` and `~/Library/LaunchAgents/`, checks deps (`gh`, `jq`, `claude`). New machine = clone this repo → `./install.sh` → `gh auth login`.
 - **`new-project.sh <repo>`** — per-project onboarding: creates labels, ensures the board view covers it, sets up the out-of-Dropbox working clone, scaffolds the manifest.
-- **`SETUP.md`** — getting-started guide: host + per-project checklists, including the irreducibly-manual steps (board-view membership, Dropbox "available offline" pinning, coauthor buy-in for shared-repo branch protection).
+- **`README.md`** — getting-started guide: host + per-project checklists, including the irreducibly-manual steps (board-view membership, Dropbox "available offline" pinning, coauthor buy-in for shared-repo branch protection).
 
 **Per-project manifest** (`projects/<repo>.yml`) is the onboarding unit — repo, board Project, archetype, clone/worktree locations, data root, and the raw-path deny-list. Version-controlled, so onboarding on a new machine is `new-project.sh` + an existing manifest.
 

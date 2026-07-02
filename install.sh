@@ -86,5 +86,5 @@ Next, as needed:
                                then ./schedule.sh live  when ready to spend
   3. Sanity check:             ./board-digest.sh   (reads the board)
 
-See SETUP.md for the full host + per-project checklists.
+See README.md for the full host + per-project checklists.
 EOF
