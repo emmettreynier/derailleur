@@ -1,0 +1,498 @@
+<title>Orchestrator flow — issue to merged PR</title>
+<style>
+  .odg {
+    --bg: #eef1f0;
+    --surface: #ffffff;
+    --line: #d7dcd9;
+    --ink: #12181a;
+    --ink-soft: #4b5559;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+
+    --emmett: #a6720a;
+    --emmett-tint: #f7ecd6;
+    --orch: #3a4fd1;
+    --orch-tint: #e7e9fb;
+    --worker: #1f8b5b;
+    --worker-tint: #e1f2ea;
+    --checker: #c1502e;
+    --checker-tint: #fae7e0;
+    --auto: #6b7280;
+    --auto-tint: #eaecee;
+
+    --ok: #1f8b5b;
+    --ok-tint: #e1f2ea;
+    --pending: #3a4fd1;
+    --pending-tint: #e7e9fb;
+    --warn: #c1502e;
+    --warn-tint: #fae7e0;
+    --drift: #a6720a;
+    --drift-tint: #f7ecd6;
+
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .odg * { box-sizing: border-box; }
+  .odg .wrap { max-width: 920px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  .odg code, .odg .m { font-family: var(--mono); }
+
+  /* ---- masthead ---- */
+  .odg .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .odg h1 {
+    font-size: clamp(28px, 4vw, 38px);
+    line-height: 1.12;
+    letter-spacing: -0.015em;
+    margin: 10px 0 14px;
+    font-weight: 700;
+    text-wrap: balance;
+    color: var(--ink);
+  }
+  .odg .dek {
+    max-width: 62ch;
+    font-size: 16.5px;
+    color: var(--ink-soft);
+    margin: 0 0 32px;
+  }
+
+  .odg .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    padding: 16px 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-bottom: 44px;
+  }
+  .odg .legend-group { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+  .odg .legend-title {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-right: 2px;
+  }
+  .odg .swatch { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); }
+  .odg .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+  .odg .rule-sample { width: 16px; height: 0; border-top: 3px solid var(--ink-soft); display: inline-block; }
+  .odg .rule-sample.dashed { border-top-style: dashed; }
+
+  /* ---- timeline spine ---- */
+  .odg .timeline { position: relative; padding-left: 26px; }
+  .odg .timeline::before {
+    content: "";
+    position: absolute;
+    left: 5px; top: 6px; bottom: 6px;
+    width: 2px;
+    background: var(--line);
+  }
+
+  .odg .step {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left-width: 5px;
+    border-left-style: solid;
+    border-radius: 10px;
+    padding: 18px 20px 20px;
+    margin-bottom: 22px;
+    scroll-margin-top: 18px;
+  }
+  .odg .step::before {
+    content: "";
+    position: absolute;
+    left: -26px; top: 24px;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 2px solid var(--line);
+  }
+  .odg .step.style-script { border-left-style: dashed; }
+
+  .odg .step.lane-emmett { border-left-color: var(--emmett); }
+  .odg .step.lane-orch   { border-left-color: var(--orch); }
+  .odg .step.lane-worker { border-left-color: var(--worker); }
+  .odg .step.lane-checker{ border-left-color: var(--checker); }
+
+  .odg .step-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .odg .step-num { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); letter-spacing: .04em; }
+  .odg .lane-badge {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .odg .lane-emmett  .lane-badge, .odg .lane-badge.lane-emmett  { background: var(--emmett-tint); color: var(--emmett); }
+  .odg .lane-orch    .lane-badge, .odg .lane-badge.lane-orch    { background: var(--orch-tint); color: var(--orch); }
+  .odg .lane-worker  .lane-badge, .odg .lane-badge.lane-worker  { background: var(--worker-tint); color: var(--worker); }
+  .odg .lane-checker .lane-badge, .odg .lane-badge.lane-checker { background: var(--checker-tint); color: var(--checker); }
+  .odg .lane-auto    .lane-badge, .odg .lane-badge.lane-auto    { background: var(--auto-tint); color: var(--auto); }
+
+  .odg .step h3 { font-size: 18px; font-weight: 700; margin: 2px 0 8px; letter-spacing: -0.005em; }
+  .odg .step p { margin: 0 0 10px; font-size: 14.5px; color: #2c3436; max-width: 68ch; }
+  .odg .step p:last-child { margin-bottom: 0; }
+  .odg .step p code { background: #f1f3f2; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 12.5px; color: var(--ink); }
+
+  .odg .fragility {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    background: var(--warn-tint);
+    border: 1px solid #ecc3b3;
+    border-radius: 8px;
+    padding: 9px 12px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: #7a3520;
+  }
+  .odg .fragility a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+  .odg .fragility a:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; border-radius: 2px; }
+  .odg .fragility.resolved { background: var(--ok-tint); border-color: #b7e0cb; color: #155b3d; }
+  .odg .fragility.resolved a { color: inherit; }
+  .odg .fragility.resolved a:focus-visible { outline-color: var(--ok); }
+
+  /* ---- branch grid ---- */
+  .odg .branches {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .odg .branch {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #fbfcfb;
+  }
+  .odg .branch-label { font-weight: 650; font-size: 13.5px; margin-bottom: 5px; }
+  .odg .branch p { font-size: 13px; color: var(--ink-soft); margin: 0 0 8px; }
+  .odg .branch-dest {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    display: inline-block;
+  }
+  .odg .branch-dest a { color: var(--orch); text-decoration: none; border-bottom: 1px dotted var(--orch); }
+  .odg .branch-dest a:hover, .odg .branch-dest a:focus-visible { text-decoration: none; border-bottom-style: solid; }
+  .odg .branch-dest a:focus-visible { outline: 2px solid var(--orch); outline-offset: 2px; border-radius: 2px; }
+
+  .odg .note {
+    font-size: 13px;
+    color: var(--ink-soft);
+    background: var(--auto-tint);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 9px 12px;
+    margin-top: 12px;
+  }
+  .odg .note code { background: #fff; }
+
+  /* ---- ledger ---- */
+  .odg .ledger-section { margin-top: 52px; }
+  .odg .ledger-section h2 {
+    font-size: 21px;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .odg .ledger-section .dek { margin-bottom: 20px; font-size: 14.5px; }
+
+  .odg .ledger-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  .odg table.ledger { width: 100%; border-collapse: collapse; min-width: 640px; }
+  .odg table.ledger th {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    background: #f6f7f6;
+  }
+  .odg table.ledger td {
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13.5px;
+    vertical-align: top;
+  }
+  .odg table.ledger tr:last-child td { border-bottom: none; }
+  .odg table.ledger td.where { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; color: var(--ink-soft); }
+  .odg table.ledger td.where a { color: var(--orch); }
+  .odg table.ledger td p { margin: 0; max-width: 46ch; }
+
+  .odg .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .odg .pill.fixed   { background: var(--ok-tint); color: var(--ok); }
+  .odg .pill.proposed{ background: var(--pending-tint); color: var(--pending); }
+  .odg .pill.open    { background: var(--warn-tint); color: var(--warn); }
+  .odg .pill.drift   { background: var(--drift-tint); color: var(--drift); }
+
+  .odg footer.colophon {
+    margin-top: 40px;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    font-family: var(--mono);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .odg { scroll-behavior: smooth; }
+  }
+</style>
+
+<div class="odg">
+  <div class="wrap">
+
+    <div class="eyebrow">FSE Research orchestrator — system diagram</div>
+    <h1>How an issue becomes a merged PR</h1>
+    <p class="dek">The full dispatch loop, one issue's journey from creation to <code>Done</code> — who acts at each step, and where the loop has actually broken.</p>
+
+    <div class="legend">
+      <div class="legend-group">
+        <span class="legend-title">Actor</span>
+        <span class="swatch"><span class="dot" style="background:var(--emmett)"></span>Emmett</span>
+        <span class="swatch"><span class="dot" style="background:var(--orch)"></span>Orchestrator</span>
+        <span class="swatch"><span class="dot" style="background:var(--worker)"></span>Worker</span>
+        <span class="swatch"><span class="dot" style="background:var(--checker)"></span>Checker</span>
+        <span class="swatch"><span class="dot" style="background:var(--auto)"></span>GitHub (automatic)</span>
+      </div>
+      <div class="legend-group">
+        <span class="legend-title">Node</span>
+        <span class="swatch"><span class="rule-sample"></span>judgment call</span>
+        <span class="swatch"><span class="rule-sample dashed"></span>deterministic script</span>
+      </div>
+    </div>
+
+    <div class="timeline">
+
+      <article class="step lane-emmett" id="step-1">
+        <div class="step-head">
+          <span class="step-num">STEP 1</span>
+          <span class="lane-badge lane-emmett">Emmett</span>
+        </div>
+        <h3>An issue enters the system</h3>
+        <p>Emmett (occasionally a worker filing a follow-on) opens an issue in an onboarded repo with a goal and <code>- [ ]</code> acceptance-criteria checkboxes. A global <code>PostToolUse</code> hook auto-adds it to the FSE Research board (project #3); Emmett sets <strong>Project</strong> and an initial <strong>Status</strong> (usually <code>Backlog</code> or <code>Up Next</code>).</p>
+        <div class="fragility">
+          <span>⚠</span>
+          <span>Routing only works if the repo's label set exists — see <a href="#ledger-labels">known issue: label bootstrap</a>.</span>
+        </div>
+      </article>
+
+      <article class="step lane-orch style-script" id="step-2">
+        <div class="step-head">
+          <span class="step-num">STEP 2</span>
+          <span class="lane-badge lane-orch">Orchestrator · script</span>
+        </div>
+        <h3>The cycle wakes up</h3>
+        <p>A <code>launchd</code> agent fires <code>run-cycle.sh</code> → <code>orchestrator-cycle.sh</code> on a schedule (night-heavy slots: 20/23/02/05/08) or by hand. If Emmett's Claude session limit is currently exhausted, the cycle defers itself rather than dispatching into a 429.</p>
+      </article>
+
+      <article class="step lane-orch style-script" id="step-3">
+        <div class="step-head">
+          <span class="step-num">STEP 3</span>
+          <span class="lane-badge lane-orch">Orchestrator · script</span>
+        </div>
+        <h3>Housekeeping</h3>
+        <p><code>ledger-prune.sh</code> drops ledger entries whose issue is closed or whose pid is dead; <code>worktree-prune.sh</code> reclaims disk from merged/closed branches. For a pruned entry whose status was <code>interrupted-*</code>, it counts consecutive <code>**Worker interrupted:</code> comments on the issue (posted by Step 7c) — below <code>WORKER_LIMIT</code> it leaves recovery to Step 5's structural dispatch; at the limit it escalates straight to <code>needs-input</code>.</p>
+        <div class="fragility resolved">
+          <span>✓</span>
+          <span>Revised 2026-07-01: this used to be the <em>only</em> place that made a crashed worker dispatchable again (by relabeling <code>resume</code>) — a single-point-of-failure if it ever missed its moment. See <a href="#ledger-retrycap">resolved: worker retry cap</a>.</span>
+        </div>
+      </article>
+
+      <article class="step lane-orch style-script" id="step-4">
+        <div class="step-head">
+          <span class="step-num">STEP 4</span>
+          <span class="lane-badge lane-orch">Orchestrator · script</span>
+        </div>
+        <h3>Checker dispatch pass</h3>
+        <p>Purely mechanical, no LLM involved: for every <em>ready</em> (non-draft) PR whose issue isn't already <code>checked-pass</code> / <code>resume</code> / <code>needs-input</code>, and that hasn't hit <code>CHECKER_LIMIT</code> (default 4 rounds this review generation), launch a checker via <code>launch-checker.sh</code> in its own detached session. A ready PR <em>is</em> the request to be checked — no judgment needed to see that.</p>
+        <div class="branch-dest">→ hands off to <a href="#step-8">Step 8 · Checker session</a></div>
+      </article>
+
+      <article class="step lane-orch style-script" id="step-5">
+        <div class="step-head">
+          <span class="step-num">STEP 5</span>
+          <span class="lane-badge lane-orch">Orchestrator · script</span>
+        </div>
+        <h3>Board digest</h3>
+        <p><code>board-digest.sh</code> reads the board, the ledger, and every open PR across onboarded repos, and buckets everything: <strong>Needs Emmett</strong> (needs-input, needs-definition, checked-pass), <strong>Dispatch candidates</strong> — <code>resume</code> (any draft PR with no live worker and not needs-input/hold/blocked, derived structurally from PR + ledger state, not from a label) plus actionable-with-no-open-PR — and <strong>In review</strong> (ready PRs awaiting a checker only; a stalled draft is no longer parked here). This is a report, not a decision — no LLM runs yet.</p>
+      </article>
+
+      <article class="step lane-orch" id="step-6">
+        <div class="step-head">
+          <span class="step-num">STEP 6</span>
+          <span class="lane-badge lane-orch">Orchestrator · LLM</span>
+        </div>
+        <h3>Intake gate &amp; dispatch</h3>
+        <p>A headless Claude session boots with the digest injected, capped at the remaining worker slots (<code>CAP</code>, default 2) and its own <code>$0.50</code> budget. It walks <strong>only</strong> the Dispatch-candidates section, <code>resume</code> issues first: well-specified + onboarded + not held/blocked → <code>launch-worker.sh</code>. Under-specified → labels it <code>needs-definition</code> and moves on, no guessing.</p>
+        <div class="fragility resolved">
+          <span>✓</span>
+          <span>Fixed 2026-07-01: this brief still forbids acting on "In review," but a stalled draft PR isn't filed there anymore — Step 5 now hands it over as a normal <code>resume</code> candidate. See <a href="#ledger-stalled">resolved: stalled PRs</a>.</span>
+        </div>
+        <div class="branch-dest">→ hands off to <a href="#step-7">Step 7 · Worker session</a></div>
+      </article>
+
+      <article class="step lane-worker" id="step-7">
+        <div class="step-head">
+          <span class="step-num">STEP 7</span>
+          <span class="lane-badge lane-worker">Worker</span>
+        </div>
+        <h3>Worker session</h3>
+        <p><code>launch-worker.sh</code> boots a worker in a reused-or-created git worktree (<code>issue-N</code> branch), in its own detached process group so it survives the dispatching session's teardown. Guarded by a raw-data write-block, a <code>Stop</code> hook, and a <code>$10.00</code> budget cap. It reads the issue (and any PR review comments, if resuming), does the work, commits as it goes, and opens a draft PR early. It ends in exactly one of three states:</p>
+
+        <div class="branches">
+          <div class="branch">
+            <div class="branch-label">a. Ready for review</div>
+            <p>Marks the PR ready, fills in the results-summary (goal / what I did / what I ran / key outputs / judgment calls / outcome), clears <code>resume</code> if it was addressing feedback.</p>
+            <div class="branch-dest">→ <a href="#step-8">Step 8 · Checker</a></div>
+          </div>
+          <div class="branch">
+            <div class="branch-label">b. Blocked</div>
+            <p>Adds <code>needs-input</code> + a specific question as a comment; PR stays draft. The <code>Stop</code> hook requires one of these two exits before it lets the session end.</p>
+            <div class="branch-dest">→ <a href="#step-9">Step 9 · Emmett's inbox</a></div>
+          </div>
+          <div class="branch">
+            <div class="branch-label">c. Interrupted (hard stop)</div>
+            <p>Budget cap, rate limit, or crash ends the process directly — no clean exit, so the <code>Stop</code> hook never runs. <code>finalize_dispatch</code> classifies the result, pushes any local commits <em>immediately</em> (doesn't wait for a future redispatch), and posts a <code>**Worker interrupted: &lt;status&gt;</code> issue comment.</p>
+            <div class="branch-dest">→ recovery via <a href="#step-5">Step 5</a>, next cycle</div>
+          </div>
+        </div>
+
+        <div class="fragility resolved">
+          <span>✓</span>
+          <span>Fixed 2026-07-01: the <code>Stop</code> hook still can't see a hard stop, but <code>finalize_dispatch</code> now handles it directly (push + comment above), and <code>WORKER_LIMIT</code> caps repeated interruptions the way <code>CHECKER_LIMIT</code> caps the checker loop. See <a href="#ledger-hookgap">resolved: hard interruption</a> and <a href="#ledger-retrycap">resolved: worker retry cap</a>.</span>
+        </div>
+      </article>
+
+      <article class="step lane-checker" id="step-8">
+        <div class="step-head">
+          <span class="step-num">STEP 8</span>
+          <span class="lane-badge lane-checker">Checker</span>
+        </div>
+        <h3>Checker session</h3>
+        <p>Triggered by Step 4, including immediately after 7a. <code>launch-checker.sh</code> boots with <code>Read</code>/<code>Bash</code>/<code>gh</code> only — no <code>Edit</code>/<code>Write</code>, and a mutation baseline (<code>git status --porcelain</code>) checked on entry and exit. It verifies each acceptance criterion against the <em>real</em> outputs — re-running scripts, not trusting the PR's claim — and tags every finding <code>actor: worker</code> (a fixable bug) or <code>actor: emmett</code> (a judgment call). It never fixes anything; it emits one structured verdict:</p>
+
+        <div class="branches">
+          <div class="branch">
+            <div class="branch-label">a. pass / pass_with_findings</div>
+            <p>Criteria met; any remaining findings are all <code>actor: emmett</code>. Labels <code>checked-pass</code>, leaves the PR ready.</p>
+            <div class="branch-dest">→ <a href="#step-9">Step 9 · Emmett's inbox</a></div>
+          </div>
+          <div class="branch">
+            <div class="branch-label">b. changes_requested / fail</div>
+            <p>At least one <code>actor: worker</code> finding. Un-readies the PR, labels <code>resume</code>.</p>
+            <div class="branch-dest">→ <a href="#step-7">Step 7 · Worker</a></div>
+          </div>
+          <div class="branch">
+            <div class="branch-label">c. blocked</div>
+            <p>Can't judge without a human — access missing, spec unintelligible. Labels <code>needs-input</code>, leaves the PR ready.</p>
+            <div class="branch-dest">→ <a href="#step-9">Step 9 · Emmett's inbox</a></div>
+          </div>
+        </div>
+
+        <div class="note">Backstop: rounds are counted per review generation (reset once a verdict reaches Emmett). At <code>CHECKER_LIMIT</code> (4) rounds without converging, <strong>Step 4</strong> escalates straight to <code>needs-input</code> instead of checking again — a worker↔checker ping-pong can't run forever.</div>
+      </article>
+
+      <article class="step lane-emmett" id="step-9">
+        <div class="step-head">
+          <span class="step-num">STEP 9</span>
+          <span class="lane-badge lane-emmett">Emmett</span>
+        </div>
+        <h3>Emmett's inbox</h3>
+        <p>Everything that needs a human judgment call lands here — via the advisor console (an interactive in-repo Claude session) or raw <code>gh</code> commands:</p>
+
+        <div class="branches">
+          <div class="branch">
+            <div class="branch-label">needs-definition</div>
+            <p>Emmett writes concrete acceptance criteria into the issue body, clears the label.</p>
+            <div class="branch-dest">→ back into <a href="#step-5">Step 5</a>'s actionable pool</div>
+          </div>
+          <div class="branch">
+            <div class="branch-label">needs-input</div>
+            <p>Emmett answers the question as a comment and relabels <code>resume</code> — content and signal, the same handshake in both directions.</p>
+            <div class="branch-dest">→ <a href="#step-7">Step 7 · Worker</a></div>
+          </div>
+          <div class="branch">
+            <div class="branch-label">checked-pass</div>
+            <p>Emmett reviews the PR. Either merges it, or sends it back with a comment (+ un-ready and <code>resume</code>).</p>
+            <div class="branch-dest">→ <a href="#step-10">Step 10</a> or back to <a href="#step-7">Step 7</a></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step lane-auto style-script" id="step-10">
+        <div class="step-head">
+          <span class="step-num">STEP 10</span>
+          <span class="lane-badge lane-auto">GitHub · automatic</span>
+        </div>
+        <h3>Merge &amp; close</h3>
+        <p>Emmett merges — branch protection (where the plan supports it) makes this literally the only way code reaches <code>main</code>. GitHub auto-closes the issue via <code>Closes #N</code>; the board's built-in <em>"PR merged → Done"</em> workflow moves the card automatically. No script of ours runs this step. Loop ends for this issue.</p>
+      </article>
+
+    </div>
+
+    <section class="ledger-section">
+      <h2>Known fragility points</h2>
+      <p class="dek">Everything below was found by reading the code, not assumed. All five were closed the same day they were found (2026-07-01) — kept here as the record of what broke and why, not a to-do list.</p>
+      <div class="ledger-table-wrap">
+        <table class="ledger">
+          <thead>
+            <tr><th>Where</th><th>What was wrong, and the fix</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            <tr id="ledger-labels">
+              <td class="where"><a href="#step-1">Step 1 · setup-labels.sh</a></td>
+              <td><p>A repo added via a project manifest without going through <code>new-project.sh</code> never got the required label set — every routing label failed silently. <code>glyphosate-neonatal-health</code> was onboarded this way and was missing 5 of 6. <strong>Fix:</strong> ran <code>setup-labels.sh</code> (idempotent, safe to re-run on any onboarded repo).</p></td>
+              <td><span class="pill fixed">Fixed</span></td>
+            </tr>
+            <tr id="ledger-stalled">
+              <td class="where"><a href="#step-5">Step 5 · board-digest.sh</a></td>
+              <td><p>A draft PR with no live worker and no label ("stalled") sat in the In-review section, which the orchestrator's brief explicitly forbids it from touching — yet nothing else owned that state either. Issue #16 was stranded here after a budget-cap interruption. <strong>Fix:</strong> dispatch eligibility is now derived structurally from PR + ledger state (draft, no live pid, not needs-input/hold/blocked) instead of requiring a label — no more court with no owner.</p></td>
+              <td><span class="pill fixed">Fixed</span></td>
+            </tr>
+            <tr id="ledger-hookgap">
+              <td class="where"><a href="#step-7">Step 7 · dispatch-common.sh</a></td>
+              <td><p>The <code>Stop</code> hook that enforces "leave a PR or a <code>needs-input</code> label" only fires on a voluntary session end — a budget-cap or rate-limit kill terminates the process directly, so the enforcement never ran. <strong>Fix:</strong> <code>finalize_dispatch</code> now handles the hard-stop case itself: pushes local commits immediately and posts a <code>**Worker interrupted:</code> comment, with no dependency on the hook.</p></td>
+              <td><span class="pill fixed">Fixed</span></td>
+            </tr>
+            <tr id="ledger-retrycap">
+              <td class="where"><a href="#step-3">Step 3 · ledger-prune.sh</a></td>
+              <td><p>The checker loop has <code>CHECKER_LIMIT</code> (4 rounds) as a backstop against endless ping-pong; there was no equivalent cap on a worker that keeps getting interrupted on the same issue. <strong>Fix:</strong> <code>WORKER_LIMIT</code> (default 4, same mechanism) counts consecutive <code>**Worker interrupted:</code> comments and escalates to <code>needs-input</code> at the limit.</p></td>
+              <td><span class="pill fixed">Fixed</span></td>
+            </tr>
+            <tr id="ledger-drift">
+              <td class="where">design.md · Worker lifecycle</td>
+              <td><p>The design doc stated the orchestrator "detects a dead process with no ready signal → flags as stuck, retries once." No such logic existed in the scripts — the doc described intent, not behavior. <strong>Fix:</strong> the section now describes the actual push+comment+<code>WORKER_LIMIT</code> mechanism above, with the old claim struck through in the doc's own history note.</p></td>
+              <td><span class="pill fixed">Fixed</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="colophon">orchestrator/design.md · orchestrator-cycle.sh · board-digest.sh · ledger-prune.sh · dispatch-common.sh · worker-brief.md · checker-brief.md — read 2026-07-01, revised 2026-07-01 after the resilience-hardening pass</footer>
+
+  </div>
+</div>

@@ -1,0 +1,39 @@
+# Per-project manifest — the onboarding unit. Version-controlled = portable.
+# Read by the raw-data deny-hook and the dispatch tooling.
+
+repo: emmettreynier/solar-income
+project: Energy                 # board "Project" field value
+archetype: git-native          # git-native | dropbox-native
+#   The repo lives OUTSIDE Dropbox and is git-backed, so it's git-native.
+#   Only data/raw is Dropbox-pinned (read-only), handled by the symlink + deny-hook below.
+
+# Worker git workspace — the existing clone is already outside Dropbox.
+working_clone: ~/projects/solar-income-est
+worktrees_dir: ~/orchestrator/worktrees/solar-income
+
+# Data layout — data/ is machine-local and gitignored (/data); each environment
+# provides its own, so nothing here is tracked in the repo. The launcher bootstraps
+# each worktree with:
+#   data/raw      -> symlink to raw_resolved   (READ-ONLY)
+#   data/results  -> writable worker output
+# On the laptop main clone, data/raw resolves via a bridge symlink
+#   (~/projects/solar-income -> ~/Dropbox/projects/solar-projects/solar-income);
+# on Sherlock, data/ is a real directory. The deny-hook keys off raw_resolved, so
+# raw protection holds regardless of how data/ is provided on a given machine.
+data_root: ~/projects/solar-income-est/data
+raw_resolved: ~/Dropbox/projects/solar-projects/solar-income/Data    # what data/raw points at
+dropbox_pinned_offline: true   # raw pinned "Available offline" so Dropbox can't evict it
+#   TODO(pin): bd-dt.fst (reduced-form-mods/border-discontinuity/) is currently 0B —
+#   pin the data tree offline / confirm it's not an un-synced placeholder before a real run.
+
+# READ-ONLY. The deny-hook blocks any write/delete whose canonical (symlink-resolved)
+# path is under raw/ (i.e. raw_resolved). Paths relative to data_root unless absolute.
+raw_paths:
+  - raw/         # the entire raw tree (symlink to Dropbox), no exceptions
+
+# Writable worker outputs. The deny-hook is a denylist (block raw_paths, allow the rest),
+# so this list is for documentation + worktree bootstrap (dirs to create), not enforcement.
+output_paths:
+  - data/results/   # worker-generated outputs / intermediate artifacts (new)
+  - figures/        # paper figures   (existing here('figures/...') convention)
+  - tables/         # paper tables    (existing here('tables/...') convention)

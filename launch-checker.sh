@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# launch-checker.sh — dispatch ONE guarded headless CHECKER for a ready PR.
+#
+# Mirrors launch-worker.sh, but the checker VERIFIES rather than works: it boots
+# with NO Edit/Write tools (it literally cannot modify code) and the launcher
+# records a mutation baseline before/after as belt-and-suspenders. It reads the
+# PR's issue acceptance criteria, runs/inspects the outputs, emits a structured
+# verdict JSON, posts a PR review, and routes (approve / request-changes+resume /
+# needs-input). See design.md — "Checkers".
+#
+# Triggers only on a READY (un-drafted) PR — that is the deliberate "check me now"
+# signal. A draft PR is still the worker's court; this refuses to run on one.
+#
+# Usage:
+#   launch-checker.sh <repo-slug> <pr#> [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
+#     <repo-slug>  matches projects/<repo-slug>.yml   (e.g. solar-income)
+#     --dry-run    print the fully-assembled command and exit (spends nothing)
+#     --foreground run in the foreground (supervised); default detaches
+set -euo pipefail
+
+# --- locate self + hub repo ---------------------------------------------------
+ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # .../orchestrator
+HOOK="$ORCH/host/hooks/raw-data-guard.py"
+BRIEF_FILE="$ORCH/checker-brief.md"
+source "$ORCH/dispatch-common.sh"   # classify_result / finalize_dispatch
+
+# Render a brief .md file into a system-prompt string: strip the leading HTML-comment
+# header, then substitute every {{TOKEN}} from the matching BRIEF_<TOKEN> env var.
+render_brief() {
+  python3 - "$1" <<'PY'
+import os, re, sys
+text = re.sub(r'^<!--.*?-->\n', '', open(sys.argv[1]).read(), count=1, flags=re.S)
+print(re.sub(r'{{(\w+)}}',
+             lambda m: os.environ.get('BRIEF_' + m.group(1), m.group(0)),
+             text), end='')
+PY
+}
+
+# --- args ---------------------------------------------------------------------
+DRY=0
+FG=0
+BUDGET="${CHECKER_BUDGET:-3.00}"   # substantive verification (re-running/inspecting real outputs) is opus-heavy; --budget arg > $CHECKER_BUDGET env > default
+FALLBACK="claude-sonnet-4-6"
+REPO_SLUG="${1:?usage: launch-checker.sh <repo-slug> <pr#> [--dry-run]}"
+PR="${2:?usage: launch-checker.sh <repo-slug> <pr#> [--dry-run]}"
+shift 2
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run)    DRY=1 ;;
+    --foreground) FG=1 ;;
+    --budget)   BUDGET="$2"; shift ;;
+    --fallback) FALLBACK="$2"; shift ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac; shift
+done
+
+MANIFEST="$ORCH/projects/$REPO_SLUG.yml"
+[ -f "$MANIFEST" ]   || { echo "no manifest for '$REPO_SLUG': $MANIFEST" >&2; exit 1; }
+[ -x "$HOOK" ]       || { echo "deny-hook missing/not executable: $HOOK" >&2; exit 1; }
+[ -f "$BRIEF_FILE" ] || { echo "checker brief missing: $BRIEF_FILE" >&2; exit 1; }
+
+# --- manifest readers ---------------------------------------------------------
+yml() { sed -nE "s/^$1:[[:space:]]*(.+)/\1/p" "$MANIFEST" \
+          | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//' | head -1; }
+expand() { eval echo "$1"; }   # ~ and $VAR expansion for path fields
+
+REPO="$(yml repo)"
+WORKING_CLONE="$(expand "$(yml working_clone)")"
+WORKTREES_DIR="$(expand "$(yml worktrees_dir)")"
+RAW_RESOLVED="$(expand "$(yml raw_resolved)")"
+
+# --- resolve the PR: branch, the issue it closes, and ready/draft state -------
+PR_JSON="$(gh pr view "$PR" -R "$REPO" --json isDraft,headRefName,closingIssuesReferences,state 2>/dev/null)" \
+  || { echo "could not read PR #$PR in $REPO" >&2; exit 1; }
+PR_STATE="$(echo "$PR_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
+IS_DRAFT="$(echo "$PR_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)["isDraft"])')"
+BRANCH="$(echo "$PR_JSON"   | python3 -c 'import sys,json;print(json.load(sys.stdin)["headRefName"])')"
+ISSUE="$(echo "$PR_JSON"    | python3 -c 'import sys,json
+refs=json.load(sys.stdin).get("closingIssuesReferences") or []
+print(refs[0]["number"] if refs else "")')"
+
+[ "$PR_STATE" = "OPEN" ] || { echo "PR #$PR is $PR_STATE, not OPEN — nothing to check." >&2; exit 1; }
+[ "$IS_DRAFT" = "True" ] && { echo "PR #$PR is a DRAFT — still the worker's court; checker runs on ready PRs only." >&2; exit 1; }
+[ -n "$ISSUE" ] || { echo "PR #$PR closes no issue (no acceptance criteria to verify against) — refusing to check." >&2; exit 1; }
+
+WORKTREE="$WORKTREES_DIR/$BRANCH"
+LOG="$ORCH/logs/${REPO_SLUG}-pr-${PR}.log"
+VERDICT_FILE="$ORCH/logs/${REPO_SLUG}-pr-${PR}-verdict.json"
+LEDGER="$ORCH/ledger.md"
+
+# --- the guard: register the deny-hook (belt-and-suspenders; checker has no Edit/Write) -
+SETTINGS_JSON="$(HOOK="$HOOK" python3 - <<'PY'
+import json, os
+print(json.dumps({"hooks": {"PreToolUse": [
+    {"matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
+     "hooks": [{"type": "command", "command": os.environ["HOOK"]}]}
+]}}))
+PY
+)"
+
+# --- checker protocol brief (system prompt; manifest/PR-filled) ----------------
+BRIEF="$(BRIEF_PR="$PR" BRIEF_REPO="$REPO" BRIEF_ISSUE="$ISSUE" \
+         BRIEF_WORKTREE="$WORKTREE" BRIEF_VERDICT_FILE="$VERDICT_FILE" \
+         render_brief "$BRIEF_FILE")"
+
+TASK="Check ready PR #$PR in $REPO (closes issue #$ISSUE). Verify it against the issue's acceptance criteria, emit the verdict JSON to $VERDICT_FILE, post your PR review, and route per your brief."
+
+# --- assemble the (guarded, no-mutate) invocation -----------------------------
+# Same guard env + deny-hook as a worker, PLUS --disallowedTools strips every
+# code-mutating tool: the checker can Read + run Bash (tests/gh) but cannot Edit/Write.
+build_cmd() {
+  CMD=( env "ORCH_MANIFEST=$MANIFEST" claude -p "$TASK"
+        --permission-mode bypassPermissions
+        --settings "$SETTINGS_JSON"
+        --add-dir "$WORKTREE"
+        --add-dir "$RAW_RESOLVED"
+        --disallowedTools Edit Write NotebookEdit
+        --max-budget-usd "$BUDGET"
+        --append-system-prompt "$BRIEF"
+        --fallback-model "$FALLBACK"
+        --output-format json )
+}
+build_cmd
+
+# --- dry run: show resolved config + command, spend nothing -------------------
+if [ "$DRY" = 1 ]; then
+  cat <<INFO
+# DRY RUN — guarded checker for $REPO PR #$PR (closes #$ISSUE)
+#   manifest      : $MANIFEST
+#   working clone : $WORKING_CLONE
+#   worktree      : $WORKTREE   (branch: $BRANCH)
+#   raw (RO)      : $RAW_RESOLVED   <- --add-dir + deny-hook protected
+#   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)
+#   verdict file  : $VERDICT_FILE
+#   budget cap    : \$$BUDGET   fallback: $FALLBACK
+#   log           : $LOG
+#
+# Assembled command:
+INFO
+  printf '  %q' "${CMD[@]}"; echo
+  exit 0
+fi
+
+# --- real dispatch ------------------------------------------------------------
+mkdir -p "$WORKTREES_DIR" "$ORCH/logs"
+git -C "$WORKING_CLONE" fetch -q origin || true
+
+# Worktree (idempotent): the checker inspects the PR branch. Reuse if present;
+# else base it on the remote PR branch (it must exist — the PR is open).
+if [ ! -d "$WORKTREE" ]; then
+  if git -C "$WORKING_CLONE" show-ref -q --verify "refs/remotes/origin/$BRANCH"; then
+    git -C "$WORKING_CLONE" worktree add "$WORKTREE" -B "$BRANCH" "origin/$BRANCH"
+  else
+    echo "remote branch origin/$BRANCH missing — cannot check PR #$PR" >&2; exit 1
+  fi
+fi
+
+# Data bootstrap: provide the read-only raw symlink + writable results dir so the
+# checker can re-run scripts that read raw and produce outputs to compare.
+if [ -n "$RAW_RESOLVED" ]; then
+  mkdir -p "$WORKTREE/data/results"
+  ln -sfn "$RAW_RESOLVED" "$WORKTREE/data/raw"
+fi
+
+# Belt-and-suspenders mutation baseline: capture the worktree's tracked-file state
+# before the checker runs; we re-check after, so an accidental write surfaces here
+# even if the in-session check missed it. (The brief also has the checker self-report.)
+MUTATION_BASELINE="$(git -C "$WORKTREE" status --porcelain 2>/dev/null || true)"
+
+# Ledger: checker entries use a `check pr#N` prefix so they DON'T match the worker
+# concurrency-count regex (`^- #<digits> |`) — checkers don't consume worker slots.
+write_ledger() {  # $1 = pid, $2 = status
+  printf -- '- check pr#%s | %s | %s | %s | pid %s | dispatched %s | status %s\n' \
+    "$PR" "$REPO" "$BRANCH" "$LOG" "$1" "$(date -u +%FT%TZ)" "$2" >> "$LEDGER"
+}
+
+# report_mutation (compares against MUTATION_BASELINE) lives in dispatch-common.sh so
+# the detached new-session body can call it too; here we pass the baseline explicitly.
+
+echo "Dispatching checker for $REPO PR #$PR (closes #$ISSUE) → $WORKTREE (log: $LOG)"
+if [ "$FG" = 1 ]; then
+  write_ledger "-" "dispatched"
+  # `|| true`: claude exits NONZERO on an interrupted run (budget cap / rate limit /
+  # error). Under `set -e` that would abort before report_mutation + finalize_dispatch,
+  # losing both the no-mutation proof and the interruption record.
+  ( cd "$WORKTREE" && "${CMD[@]}" ) 2>&1 | tee "$LOG" || true
+  report_mutation "$WORKTREE" "$MUTATION_BASELINE"
+  finalize_dispatch "$LOG" "$LEDGER" "-" "$WORKTREE" "checker"
+else
+  # Detached + ISOLATED: own session (see run_in_new_session) so the dispatching
+  # session's teardown can't reap it. Inside the session: run claude, then
+  # report_mutation (no-mutation proof) + finalize_dispatch, all appended to the log.
+  run_in_new_session "$LOG" "$LEDGER" "$WORKTREE" "checker" "$MUTATION_BASELINE" -- "${CMD[@]}" &
+  CHECKER_PID=$!
+  disown 2>/dev/null || true
+  write_ledger "$CHECKER_PID" "dispatched"
+  echo "  pid $CHECKER_PID  (detached, own session; mutation + completion checks in the log)"
+fi

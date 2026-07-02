@@ -1,0 +1,4 @@
+# Orchestrator runtime state (machine-local: dispatch ledger + worker logs)
+ledger.md
+logs/
+state/

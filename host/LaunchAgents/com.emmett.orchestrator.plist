@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.emmett.orchestrator — fires the orchestrator dispatch cycle on a weeknight
+  schedule. Canonical TEMPLATE lives here in the repo; schedule.sh renders it (substituting
+  @ORCH@ for the live repo path) into ~/Library/LaunchAgents/ and bootstraps it (portability
+  model: host bits live in-repo, but launchd needs an absolute path baked in, so the repo
+  location gets stamped in at install time — re-run './schedule.sh install' after moving
+  the repo, and 'schedule.sh status' will flag it if you forget).
+
+  - StartCalendarInterval slots MUST match the SLOTS list in schedule.sh (that list
+    drives the pmset wake chain; these entries drive the actual fire). Night-heavy
+    centers 20/23/02/05/08 to shift the grind off Emmett's daytime session-limit
+    window — but the entries below fire 15 min EARLY (:45 of the prior hour) and the
+    `--jitter` flag makes run-cycle.sh sleep a random 0–30 min, so each cycle starts
+    uniformly within ±15 min of its center. That de-syncs us from other hosts' on-the
+    -hour cron jobs (avoids a synchronized server stampede).
+  - WeekdayInterval matters less here (the slots span midnight), so we DON'T pin a
+    Weekday — pmset already gates power-on to weekdays (MTWRF) and run-cycle.sh's
+    usage gate skips spent windows. Keep it simple: fire at every slot, every day.
+  - No RunAtLoad: we do NOT want a dispatch on every login/reboot — only on schedule
+    (and the manual `schedule.sh run` kickstart).
+  - Plan-only vs live is NOT set here — it's a persistent toggle in state/mode, flipped
+    by `schedule.sh live` / `schedule.sh plan-only` and read by run-cycle.sh on every
+    fire. So this plist never needs hand-editing to go live or back. Default (no toggle
+    set) is plan-only, so a fresh install never dispatches for real until you opt in.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.emmett.orchestrator</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@ORCH@/run-cycle.sh</string>
+    <string>--jitter</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/emmettr/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>/Users/emmettr</string>
+  </dict>
+
+  <!-- Centers 20/23/02/05/08, fired 15 min EARLY; --jitter sleeps 0–30 min -> ±15. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Hour</key><integer>1</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>45</integer></dict>
+  </array>
+
+  <!-- launchd captures the wrapper's own stdout/stderr; run-cycle.sh also tees the
+       human-readable cycle log to logs/cycle.log. These catch early/PATH failures
+       that happen before the script can log. -->
+  <key>StandardOutPath</key>
+  <string>@ORCH@/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@ORCH@/logs/launchd.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
