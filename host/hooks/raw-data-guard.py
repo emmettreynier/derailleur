@@ -78,18 +78,26 @@ def is_under(candidate: str, prefix: str) -> bool:
     return candidate == prefix or candidate.startswith(prefix + os.sep)
 
 
+def is_blocked(target: str, cwd: str, protected: list[str], writable: list[str]) -> bool:
+    """A write to `target` is blocked iff it lands under a protected raw prefix
+    AND not under an explicit writable (output_paths) carveout."""
+    c = canon(target, cwd)
+    return any(is_under(c, p) for p in protected) and not any(is_under(c, w) for w in writable)
+
+
 # ---- manifest --------------------------------------------------------------
 
-def load_protected_prefixes() -> list[str]:
-    """Canonical, symlink-resolved prefixes the worker must never write/delete.
-    Parsed from the manifest with a tiny field reader (no yaml dependency)."""
+def _manifest_reader():
+    """Return (data_root, scalar, list_items) for the active manifest, or None.
+    A tiny field reader (no yaml dependency) shared by the protected/writable
+    prefix loaders."""
     manifest = os.environ.get("ORCH_MANIFEST")
     if not manifest or not os.path.isfile(manifest):
-        return []
+        return None
     try:
         text = open(manifest, encoding="utf-8").read()
     except OSError:
-        return []
+        return None
 
     def scalar(key: str):
         m = re.search(rf"^{key}:\s*(.+?)\s*(?:#.*)?$", text, re.MULTILINE)
@@ -110,6 +118,15 @@ def load_protected_prefixes() -> list[str]:
 
     data_root = scalar("data_root")
     data_root = os.path.expanduser(data_root) if data_root else os.getcwd()
+    return data_root, scalar, list_items
+
+
+def load_protected_prefixes() -> list[str]:
+    """Canonical, symlink-resolved prefixes the worker must never write/delete."""
+    r = _manifest_reader()
+    if not r:
+        return []
+    data_root, scalar, list_items = r
     prefixes = set()
 
     raw_resolved = scalar("raw_resolved")
@@ -119,6 +136,20 @@ def load_protected_prefixes() -> list[str]:
         # `.` means the whole data_root tree is raw.
         prefixes.add(canon("" if rp == "." else rp, data_root))
     return [p for p in prefixes if p]
+
+
+def load_writable_prefixes() -> list[str]:
+    """Canonical `output_paths` prefixes that stay WRITABLE even when nested
+    under a protected raw tree — an explicit allow-carveout over the raw
+    denylist. Needed when a repo's writable outputs live *inside* a shared data
+    tree (e.g. per-survey outputs/ + results/ under a Dropbox-symlinked data
+    dir): raw_resolved blanket-protects the tree; these dirs punch back through.
+    Author responsibility: never list a path that overlaps real raw data."""
+    r = _manifest_reader()
+    if not r:
+        return []
+    data_root, _scalar, list_items = r
+    return [canon(p, data_root) for p in list_items("output_paths") if p]
 
 
 # ---- detection -------------------------------------------------------------
@@ -133,7 +164,7 @@ def redirect_targets(sub: str) -> list[str]:
     return re.findall(r"(?:&|\d)?>>?\s*([^\s;|&<>()\"']+|\"[^\"]*\"|'[^']*')", sub)
 
 
-def check_bash(command: str, protected: list[str], cwd: str) -> None:
+def check_bash(command: str, protected: list[str], writable: list[str], cwd: str) -> None:
     for sub in split_subcommands(command):
         try:
             words = shlex.split(sub)
@@ -171,7 +202,7 @@ def check_bash(command: str, protected: list[str], cwd: str) -> None:
         # --- raw-data: redirections into protected paths ---
         for tgt in redirect_targets(sub):
             tgt = tgt.strip("\"'")
-            if any(is_under(canon(tgt, cwd), p) for p in protected):
+            if is_blocked(tgt, cwd, protected, writable):
                 emit_deny(f"Blocked write to read-only raw data: {tgt}. "
                           "Raw data is read-only; write outputs under data/results/ (or figures/, tables/).")
 
@@ -184,13 +215,13 @@ def check_bash(command: str, protected: list[str], cwd: str) -> None:
             targets = positionals[-1:]                  # only the destination is written
         targets += [a[3:] for a in argv[1:] if a.startswith("of=")]   # dd of=FILE
         for arg in targets:
-            if any(is_under(canon(arg, cwd), p) for p in protected):
+            if is_blocked(arg, cwd, protected, writable):
                 emit_deny(f"Blocked `{name}` writing read-only raw data: {arg}. "
                           "Raw data is read-only; write outputs under data/results/ (or figures/, tables/).")
 
 
-def check_file_write(path: str, protected: list[str], cwd: str) -> None:
-    if path and any(is_under(canon(path, cwd), p) for p in protected):
+def check_file_write(path: str, protected: list[str], writable: list[str], cwd: str) -> None:
+    if path and is_blocked(path, cwd, protected, writable):
         emit_deny(f"Blocked write to read-only raw data: {path}. "
                   "Raw data is read-only; write outputs under data/results/ (or figures/, tables/).")
 
@@ -208,13 +239,14 @@ def main() -> None:
     ti = event.get("tool_input", {}) or {}
     cwd = event.get("cwd") or os.getcwd()
     protected = load_protected_prefixes()
+    writable = load_writable_prefixes()
 
     if tool == "Bash":
-        check_bash(ti.get("command", "") or "", protected, cwd)
+        check_bash(ti.get("command", "") or "", protected, writable, cwd)
     elif tool in ("Write", "Edit", "MultiEdit"):
-        check_file_write(ti.get("file_path", "") or "", protected, cwd)
+        check_file_write(ti.get("file_path", "") or "", protected, writable, cwd)
     elif tool == "NotebookEdit":
-        check_file_write(ti.get("notebook_path", "") or "", protected, cwd)
+        check_file_write(ti.get("notebook_path", "") or "", protected, writable, cwd)
 
     allow()
 

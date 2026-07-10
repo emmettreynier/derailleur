@@ -179,9 +179,19 @@ if [ ! -d "$WORKTREE" ]; then
   fi
 fi
 
-# Worktree data bootstrap: data/ is machine-local (gitignored), so provide the
-# read-only raw symlink + a writable results dir for the worker to use.
-if [ -n "$RAW_RESOLVED" ]; then
+# Worktree data bootstrap: the data dirs are machine-local (gitignored), so the
+# worker's fresh worktree starts without them. Two shapes:
+#   (a) repo ships its own setup-symlinks.sh — a code-only repo whose shared data
+#       lives in Dropbox under its own layout (e.g. distance-decay-est's
+#       `06 Raw_data` / `07 Dataclean`). Run it in the worktree so those symlinks
+#       exist; point it at the same tree as raw_resolved (its parent dir is the
+#       DROPBOX_PROJ root the script expects). The deny-hook still governs writes.
+#   (b) default template — one read-only data/raw symlink + a writable results dir.
+if [ -x "$WORKTREE/setup-symlinks.sh" ]; then
+  ( cd "$WORKTREE" \
+    && DROPBOX_PROJ="${RAW_RESOLVED:+$(dirname "$RAW_RESOLVED")}" ./setup-symlinks.sh ) \
+    || echo "⚠ setup-symlinks.sh failed — worktree may be missing data symlinks" >&2
+elif [ -n "$RAW_RESOLVED" ]; then
   mkdir -p "$WORKTREE/data/results"
   ln -sfn "$RAW_RESOLVED" "$WORKTREE/data/raw"
 fi
