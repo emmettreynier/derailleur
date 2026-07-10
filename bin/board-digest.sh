@@ -428,7 +428,7 @@ for r in rows:
         recent.append((ts or "?", r))
 w(f"## Recently closed — Done, last {done_days}d (ignore for dispatch) ({len(recent)})")
 if recent:
-    for ts, r in sorted(recent, reverse=True):
+    for ts, r in sorted(recent, key=lambda x: (x[0], short(x[1]["repo_url"]), x[1]["num"] or 0), reverse=True):
         w(line(r, f"  closed {ts[:10] if ts and ts!='?' else '?'}"))
 else:
     w("- none")
