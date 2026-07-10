@@ -128,7 +128,7 @@ Workers run unattended (no human to approve prompts), so guardrails are **defens
 
 **Layer 2 — Claude Code (deterministic, harness-enforced):**
 - `--permission-mode bypassPermissions` so workers never stall on an unanswerable prompt, **but**
-- a **`PreToolUse` hook** *denies* dangerous calls before they run — `rm -rf`, writes outside the worktree, `git push … main`, force-pushes;
+- a **`PreToolUse` hook** *denies* dangerous calls before they run — `rm -rf`, writes outside the worktree, `git push … main`, force-pushes, and writes/deletes under the manifest's raw prefixes (`raw_resolved` + `raw_paths`). Writes under a manifest `output_paths` entry are an explicit **allow-carveout** over that raw denylist — needed when a repo's writable outputs live *inside* a shared raw tree (e.g. `distance-decay-est`'s per-survey `outputs/`/`results/` nested under the Dropbox-symlinked `07 Dataclean`);
 - a **`Stop` hook** refuses to let a worker finish until protocol is met (PR opened, results-summary present), feeding the gap back;
 - `--disallowedTools` blocks destructive patterns; checkers additionally drop `Edit`/`Write` (see Checkers).
 
