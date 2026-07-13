@@ -21,12 +21,13 @@
 #   BUDGET          orchestrator session budget in USD (default 0.50)
 #   WORKER_BUDGET   per-worker session budget in USD (default 10.00)
 #   CHECKER_BUDGET  per-checker session budget in USD (default 3.00)
-#   CHECKER_LIMIT   max checker rounds per PR before escalating to Emmett (default 4)
+#   CHECKER_LIMIT   max checker rounds per PR before escalating to the operator (default 4)
 #   WORKER_LIMIT    max consecutive interrupted worker attempts on one issue before
-#                   escalating to Emmett instead of retrying again (default 4)
+#                   escalating to the operator instead of retrying again (default 4)
 set -euo pipefail
 
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ORCH/bin/config-common.sh"   # OPERATOR_NAME, GITHUB_HANDLE (escalation @-mention)
 CAP="${CAP:-2}"
 BUDGET="${BUDGET:-0.50}"
 WORKER_BUDGET="${WORKER_BUDGET:-10.00}"
@@ -76,8 +77,8 @@ SLUGS=$(ls "$ORCH/projects/"*.yml 2>/dev/null | xargs -n1 basename 2>/dev/null \
 
 # 3. Dispatch checkers on ready, not-yet-approved PRs --------------------------
 # Deterministic: a PR marked ready (un-drafted) IS the "check me" signal — no LLM
-# judgment needed. Skip PRs already approved (Emmett's merge gate), escalated
-# (needs-input — his court), or with a checker already in flight (the ledger).
+# judgment needed. Skip PRs already approved (the operator's merge gate), escalated
+# (needs-input — their court), or with a checker already in flight (the ledger).
 echo "— checker pass —"
 for f in "$ORCH"/projects/*.yml; do
   [ -f "$f" ] || continue
@@ -91,7 +92,7 @@ for f in "$ORCH"/projects/*.yml; do
 import sys, json
 for pr in json.load(sys.stdin):
     if pr.get("isDraft"): continue
-    if pr.get("reviewDecision") == "APPROVED": continue          # human-approved -> Emmett
+    if pr.get("reviewDecision") == "APPROVED": continue          # human-approved -> operator
     refs = pr.get("closingIssuesReferences") or []
     if not refs: continue                                        # no acceptance criteria
     print(pr["number"], refs[0]["number"])
@@ -109,12 +110,12 @@ for pr in json.load(sys.stdin):
     fi
     # Backstop against a worker<->checker ping-pong: if this PR has been through
     # CHECKER_LIMIT rounds *in the current review generation* without converging,
-    # stop checking and escalate to Emmett (the holdout is almost certainly a
+    # stop checking and escalate to the operator (the holdout is almost certainly a
     # research call a worker can't settle). Rounds are counted PER GENERATION, not
     # over the PR's lifetime: a pass / pass_with_findings / blocked verdict hands the
-    # ball to Emmett and ends a generation; changes_requested / fail keeps it
+    # ball to the operator and ends a generation; changes_requested / fail keeps it
     # worker-side. So we count only the verdict comments AFTER the most recent
-    # to-Emmett verdict — once Emmett has reviewed and bounced, the next check is
+    # to-operator verdict — once the operator has reviewed and bounced, the next check is
     # round 1 again, not round N. (Verdict comments are led by "**Checker verdict:".)
     NROUNDS="$(gh pr view "$pr" -R "$repo" --json comments 2>/dev/null \
       | python3 -c '
@@ -124,19 +125,19 @@ try:
 except Exception:
     print(0); sys.exit()
 verdicts = [c["body"] for c in comments if c["body"].startswith("**Checker verdict")]
-to_emmett = {"pass", "pass_with_findings", "blocked"}   # verdicts that end a generation
+to_operator = {"pass", "pass_with_findings", "blocked"}   # verdicts that end a generation
 last_handoff = -1
 for i, b in enumerate(verdicts):
     m = re.match(r"\*\*Checker verdict:\s*`?\s*([a-z_]+)", b, re.I)
-    if (m.group(1).lower() if m else "") in to_emmett:
+    if (m.group(1).lower() if m else "") in to_operator:
         last_handoff = i
 print(len(verdicts) - (last_handoff + 1))
 ' 2>/dev/null || echo 0)"
     if [ "${NROUNDS:-0}" -ge "$CHECKER_LIMIT" ]; then
-      echo "  $slug PR #$pr — $NROUNDS checker rounds (limit $CHECKER_LIMIT); escalating to Emmett"
+      echo "  $slug PR #$pr — $NROUNDS checker rounds (limit $CHECKER_LIMIT); escalating to $OPERATOR_NAME"
       if [ "$DRY" = 0 ]; then
         gh issue edit "$issue" -R "$repo" --add-label needs-input 2>/dev/null || true
-        gh pr comment "$pr" -R "$repo" --body "🔁 Checker limit reached: $NROUNDS checker rounds without a clean pass. Escalating to @emmettreynier — the unresolved finding is likely a research-judgment call a worker can't settle. Labeled needs-input."
+        gh pr comment "$pr" -R "$repo" --body "🔁 Checker limit reached: $NROUNDS checker rounds without a clean pass. Escalating to @$GITHUB_HANDLE — the unresolved finding is likely a research-judgment call a worker can't settle. Labeled needs-input."
       fi
       continue
     fi
@@ -181,6 +182,7 @@ fi
 
 BRIEF="$(BRIEF_SLOTS="$SLOTS" BRIEF_SLUGS="$SLUGS" \
          BRIEF_DISPATCH_LINE="$DISPATCH_LINE" BRIEF_MUTATE_RULE="$MUTATE_RULE" \
+         BRIEF_OPERATOR_NAME="$OPERATOR_NAME" \
          render_brief "$BRIEF_FILE")"
 
 TASK="Run one orchestration cycle. From the injected board digest, dispatch up to $SLOTS worker(s) on well-specified, onboarded issues and handle under-specified ones per your brief. Follow the brief exactly."

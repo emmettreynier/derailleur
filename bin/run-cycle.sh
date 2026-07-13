@@ -8,8 +8,8 @@
 #   1. PATH — launchd starts jobs with a stripped environment; claude (~/.local/bin),
 #      gh (homebrew), and the python.org python3 are all OFF the default PATH, so a
 #      naive call dies with "command not found" and a 0-byte log. We set a known PATH.
-#   2. Usage-limit backoff — the dispatches run on Emmett's Claude subscription (no API
-#      key), so they draw the SAME 5-hour rolling session limit he uses by day. When a
+#   2. Usage-limit backoff — the dispatches run on the operator's Claude subscription (no
+#      API key), so they draw the SAME 5-hour rolling session limit they use by day. When a
 #      dispatch hits it, the result JSON says e.g. "resets 7:40pm"; finalize_dispatch
 #      records that epoch to state/usage-reset. We read it here and SKIP the whole
 #      cycle while inside an exhausted window — a deferred fire costs nothing and the

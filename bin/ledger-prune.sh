@@ -10,10 +10,11 @@
 # (Phase 4): workers don't self-update the ledger; the orchestrator prunes here.
 set -euo pipefail
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ORCH/bin/config-common.sh"   # GITHUB_HANDLE (escalation @-mention)
 LEDGER="${LEDGER:-$ORCH/ledger.md}"
 [ -f "$LEDGER" ] || { echo "ledger-prune: no ledger at $LEDGER (nothing to do)"; exit 0; }
 
-LEDGER="$LEDGER" python3 <<'PY'
+LEDGER="$LEDGER" GITHUB_HANDLE="$GITHUB_HANDLE" python3 <<'PY'
 import json, os, re, subprocess, sys
 
 ledger = os.environ["LEDGER"]
@@ -120,7 +121,7 @@ def escalate_needs_input(repo, num, n, limit):
                          "--add-label", "needs-input"], capture_output=True, timeout=15)
         subprocess.run(["gh", "issue", "comment", str(num), "-R", repo, "--body",
             f"🔁 Worker limit reached: {n} interrupted attempts in a row without "
-            f"reaching `ready` (limit {limit}). Escalating to @emmettreynier — the "
+            f"reaching `ready` (limit {limit}). Escalating to @{os.environ.get('GITHUB_HANDLE','')} — the "
             f"issue may be too large for one worker budget, or something is "
             f"silently blocking progress."], capture_output=True, timeout=15)
     except Exception:
@@ -133,7 +134,7 @@ def escalate_needs_input(repo, num, n, limit):
 # redispatched every cycle forever. WORKER_LIMIT (mirrors CHECKER_LIMIT) closes
 # that: count consecutive trailing "interrupted" comments (posted by
 # finalize_dispatch on every hard stop) and once the limit is hit, hand it to
-# Emmett instead of burning another worker budget on it.
+# the operator instead of burning another worker budget on it.
 WORKER_LIMIT = int(os.environ.get("WORKER_LIMIT", "4"))
 
 def handle_interrupted(repo, num):

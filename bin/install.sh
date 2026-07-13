@@ -55,8 +55,8 @@ fi
 # --- executability of in-repo host pieces ------------------------------------
 # Git preserves the +x bit, so on a fresh clone these are already executable;
 # we re-assert it so a hand-edited or odd-umask checkout still works. Idempotent.
-# NB: dispatch-common.sh is SOURCED (a lib), not executed — leave it non-exec so
-# install.sh doesn't churn its mode bit into a perpetual dirty diff.
+# NB: dispatch-common.sh and config-common.sh are SOURCED (libs), not executed —
+# leave them non-exec so install.sh doesn't churn a mode bit into a perpetual dirty diff.
 chmod_ok() { [ -f "$1" ] && chmod +x "$1"; }
 for f in \
   "$ORCH"/host/hooks/raw-data-guard.py \
@@ -64,7 +64,7 @@ for f in \
   "$ORCH"/host/hooks/session-start-digest.sh \
   "$ORCH"/bin/*.sh
 do
-  case "$f" in */dispatch-common.sh) continue ;; esac
+  case "$f" in */dispatch-common.sh|*/config-common.sh) continue ;; esac
   chmod_ok "$f"
 done
 note "✓ host hooks + launcher scripts marked executable"
@@ -74,6 +74,17 @@ note "✓ host hooks + launcher scripts marked executable"
 # cycle (or schedule.sh) doesn't have to.
 mkdir -p "$ORCH/logs" "$ORCH/state"
 note "✓ logs/ and state/ present"
+
+# --- per-operator identity config (gitignored; scaffold from the tracked example) --
+# The scripts source orchestrator.conf to learn who this instance runs as. Scaffold
+# it from the example on first install; never clobber an existing one.
+if [ -f "$ORCH/orchestrator.conf" ]; then
+  note "✓ orchestrator.conf present"
+else
+  cp "$ORCH/orchestrator.conf.example" "$ORCH/orchestrator.conf"
+  warn "scaffolded orchestrator.conf from the example — EDIT it with your identity"
+  warn "  (OPERATOR_NAME / GITHUB_HANDLE / PR_OWNER / LAUNCHD_LABEL) before dispatching."
+fi
 
 # --- next steps (opt-in; this script does not run them) -----------------------
 cat <<EOF

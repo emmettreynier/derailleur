@@ -17,6 +17,7 @@
 set -euo pipefail
 
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ORCH/bin/config-common.sh"   # OPERATOR_NAME (rendered into the brief below)
 HOOK="$ORCH/host/hooks/session-start-digest.sh"
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && { DRY_RUN=1; shift; }
@@ -34,7 +35,7 @@ PY
 
 # --- orchestrator role brief (board-only; reports vs. decides) -----------------
 read -r -d '' BRIEF <<'BRIEF_EOF' || true
-You are the orchestrator for Emmett's research work. A board digest was injected
+You are the orchestrator for {{OPERATOR_NAME}}'s research work. A board digest was injected
 at session start (additionalContext) — read it first; it is your view of the
 FSE Research board, in-flight workers (ledger), needs-input/needs-definition,
 resume issues, and ready-for-review PRs.
@@ -50,10 +51,14 @@ Your job is to DECIDE what to dispatch — the digest only reports. Rules:
 - resume issues are the worker's court — dispatch those first.
 - Never dispatch anything labeled hold or blocked, or already in-flight (ledger).
 - Comment = content, label = signal. Route by labels; never interpret prose into
-  action on Emmett's behalf for substantive calls — escalate those to him.
-- Phase 1: you propose; Emmett dispatches by hand via launch-worker.sh. Tell him
-  exactly which issue(s) you'd dispatch and why, and what needs his input.
+  action on {{OPERATOR_NAME}}'s behalf for substantive calls — escalate those to them.
+- Phase 1: you propose; {{OPERATOR_NAME}} dispatches by hand via launch-worker.sh. Tell them
+  exactly which issue(s) you'd dispatch and why, and what needs their input.
 BRIEF_EOF
+
+# Fill {{OPERATOR_NAME}} in the brief (quoted heredoc above keeps backticks literal;
+# substitute here rather than unquoting it so those command examples aren't executed).
+BRIEF="${BRIEF//\{\{OPERATOR_NAME\}\}/$OPERATOR_NAME}"
 
 if [ "$DRY_RUN" = "1" ]; then
   echo "=== board digest (preview) ============================================"

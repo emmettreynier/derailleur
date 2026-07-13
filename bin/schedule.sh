@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # schedule.sh — install / manage the launchd schedule that drives the orchestrator
 # loop unattended (Phase 4), plus the pmset wake chain that lets it fire overnight on
-# a laptop. The plist TEMPLATE is host/LaunchAgents/<LABEL>.plist (version-controlled,
-# with @ORCH@ placeholders); `install` renders it — substituting @ORCH@ for the current
-# repo path — into ~/Library/LaunchAgents/ per the portability model. Because launchd
+# a laptop. The plist TEMPLATE is host/LaunchAgents/orchestrator.plist (version-controlled,
+# with @ORCH@/@LABEL@/@HOME@ placeholders); `install` renders it — stamping in the current
+# repo path, the operator's launchd LABEL (from orchestrator.conf), and HOME — into
+# ~/Library/LaunchAgents/<LABEL>.plist per the portability model. Because launchd
 # needs an absolute path baked into the plist, moving the repo means re-running
 # `install`; `status` diffs the installed plist against a fresh render and flags drift.
 #
@@ -32,8 +33,11 @@
 set -uo pipefail
 
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LABEL="com.emmett.orchestrator"
-PLIST_SRC="$ORCH/host/LaunchAgents/$LABEL.plist"
+source "$ORCH/bin/config-common.sh"   # LAUNCHD_LABEL (+ other operator identity)
+LABEL="$LAUNCHD_LABEL"
+# The tracked template has a fixed, identity-free name; schedule.sh stamps the
+# operator's LABEL (and repo path + HOME) into the copy it installs.
+PLIST_SRC="$ORCH/host/LaunchAgents/orchestrator.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 UID_NUM="$(id -u)"
 MODE_FILE="$ORCH/state/mode"   # "live" -> dispatch for real; anything else/absent -> plan-only
@@ -46,6 +50,12 @@ MODE_FILE="$ORCH/state/mode"   # "live" -> dispatch for real; anything else/abse
 SLOTS=(19:45 22:45 01:45 04:45 07:45)
 
 die() { echo "schedule: $*" >&2; exit 1; }
+
+# Render the plist template to stdout: stamp in the repo path (@ORCH@), the operator's
+# launchd label (@LABEL@), and HOME (@HOME@) so a labmate's install is fully their own.
+render_plist() {
+  sed -e "s#@ORCH@#$ORCH#g" -e "s#@LABEL@#$LABEL#g" -e "s#@HOME@#$HOME#g" "$PLIST_SRC"
+}
 
 # next_slot_epoch — soonest upcoming slot strictly after now (today or tomorrow).
 next_slot_epoch() {
@@ -90,7 +100,7 @@ cmd_install() {
   # entry itself rather than following it, so this is safe even if PLIST_DST is a
   # leftover symlink from a pre-templating install (writing through it with a plain
   # '>' would instead truncate the in-repo template it points at).
-  sed "s#@ORCH@#$ORCH#g" "$PLIST_SRC" > "$PLIST_DST.tmp" && mv "$PLIST_DST.tmp" "$PLIST_DST"
+  render_plist > "$PLIST_DST.tmp" && mv "$PLIST_DST.tmp" "$PLIST_DST"
   echo "rendered $PLIST_DST from $PLIST_SRC (repo path: $ORCH)"
   # bootout any prior copy, then bootstrap the current one (modern launchctl verbs).
   launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
@@ -169,7 +179,7 @@ cmd_status() {
   fi
   local plist_state="absent"
   if [ -f "$PLIST_DST" ]; then
-    if [ -f "$PLIST_SRC" ] && diff -q <(sed "s#@ORCH@#$ORCH#g" "$PLIST_SRC") "$PLIST_DST" >/dev/null 2>&1; then
+    if [ -f "$PLIST_SRC" ] && diff -q <(render_plist) "$PLIST_DST" >/dev/null 2>&1; then
       plist_state="current"
     else
       plist_state="STALE — repo path changed since last install; run '$0 install' to re-render"

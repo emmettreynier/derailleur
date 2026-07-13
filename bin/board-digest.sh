@@ -15,10 +15,11 @@ set -euo pipefail
 
 PROJECT=3
 OWNER="@me"
-PR_OWNER="emmettreynier"
 DONE_DAYS="${DONE_DAYS:-7}"
 ORCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LEDGER="$ORCH_DIR/ledger.md"
+# Operator identity (PR_OWNER, OPERATOR_NAME, …) comes from orchestrator.conf.
+source "$ORCH_DIR/bin/config-common.sh"
 
 command -v gh >/dev/null  || { echo "board-digest: gh not found" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "board-digest: python3 not found" >&2; exit 1; }
@@ -35,6 +36,7 @@ onboarded_slugs="$(ls "$ORCH_DIR/projects/"*.yml 2>/dev/null | xargs -n1 basenam
                      | sed 's/\.yml$//' | paste -sd, - || true)"
 
 BOARD_JSON="$board_json" CLOSED_JSON="$closed_json" PR_OWNER="$PR_OWNER" \
+OPERATOR_NAME="$OPERATOR_NAME" \
 LEDGER="$LEDGER" DONE_DAYS="$DONE_DAYS" ONBOARDED_SLUGS="$onboarded_slugs" python3 <<'PY'
 import json, os, re, subprocess, sys
 from datetime import datetime, timezone, timedelta
@@ -42,6 +44,7 @@ from datetime import datetime, timezone, timedelta
 board  = json.loads(os.environ["BOARD_JSON"]).get("items", [])
 closed = json.loads(os.environ["CLOSED_JSON"])
 pr_owner = os.environ.get("PR_OWNER", "")
+operator = os.environ.get("OPERATOR_NAME", "the operator")
 done_days = int(os.environ["DONE_DAYS"])
 now = datetime.now(timezone.utc)
 
@@ -87,7 +90,7 @@ def has(r, lab): return lab in r["labels"]
 # Work-vs-review is carried by PR draft/ready state (design.md), so the digest
 # must read it: an issue with an open PR is in the loop (working / in review),
 # NOT a fresh dispatch candidate. A ready PR routes to the checker; the checker's
-# verdict then lands as an issue label (checked-pass -> Emmett; resume -> worker).
+# verdict then lands as an issue label (checked-pass -> operator; resume -> worker).
 def open_prs(repo):
     try:
         r = subprocess.run(
@@ -239,12 +242,12 @@ w()
 # draft, no live worker, no needs-input/hold/blocked -> WORKER'S COURT. This is
 # structural, not label-dependent: a draft PR nobody is actively working is
 # unambiguously something a worker should (re)pick up, whether it got there via
-# checker feedback (`resume`), Emmett's hand-back, or a crash mid-run that never
+# checker feedback (`resume`), the operator's hand-back, or a crash mid-run that never
 # got a chance to set any label at all. Folded directly into dispatch candidates
 # below (2026-07-01) — a prior "stalled, needs a label to be dispatchable" bucket
 # silently stranded first-time-interrupted workers (see design.md discussion).
 # draft+live         -> a working worker (already shown in the In-flight section).
-# ready+checked-pass (or human-approved) -> Emmett's merge gate (his court).
+# ready+checked-pass (or human-approved) -> the operator's merge gate (their court).
 # ready+needs-input -> checker escalated -> shown via the issue's needs-input row.
 # ready, otherwise  -> checker's court (awaiting/needing a checker).
 def short_repo(nwo_str): return nwo_str.split("/")[-1]
@@ -288,10 +291,10 @@ for pr in open_pr_list:
     else:
         awaiting_check.append(pr)         # ready, not passed, not handed back -> checker's court
 
-# ---- NEEDS EMMETT (his court — surface, never dispatch) ----------------------
+# ---- NEEDS THE OPERATOR (their court — surface, never dispatch) --------------
 ni  = [r for r in rows if has(r, NEEDS_INPUT)]
 nd  = [r for r in rows if has(r, NEEDS_DEF)]
-w(f"## Needs Emmett — human's court ({len(ni)+len(nd)+len(approved)}) · surface to him, never dispatch")
+w(f"## Needs {operator} — human's court ({len(ni)+len(nd)+len(approved)}) · surface to them, never dispatch")
 w(f"**Checker-passed PRs — ready to merge ({len(approved)}):**")
 [w(pr_line(p)) for p in approved] or w("- none")
 w(f"**needs-input ({len(ni)}):**")
@@ -303,7 +306,7 @@ w()
 # ---- DISPATCH CANDIDATES (worker's court) -----------------------------------
 # resume = a draft PR with no live worker and nothing parking it (needs-input/
 # hold/blocked) — derived structurally above from PR + ledger state, so it
-# catches checker-bounced work, Emmett hand-backs, AND crashed-first-attempt
+# catches checker-bounced work, operator hand-backs, AND crashed-first-attempt
 # workers uniformly, with no dependency on a `resume` label having been written.
 # A bare `resume` label with no open PR (rare — e.g. hand-labeled) is included
 # too, defensively. Plus fresh actionable issues with NO open PR at all (an open
@@ -320,7 +323,7 @@ actionable = [
     r for r in rows
     if r["status"] in ("In Progress", "Up Next")
     and not has(r, HOLD) and not has(r, BLOCKED)
-    and not has(r, NEEDS_DEF)        # already adjudicated under-specified -> Emmett's court
+    and not has(r, NEEDS_DEF)        # already adjudicated under-specified -> operator's court
     and not is_live_inflight(r) and not has(r, RESUME)
     and issue_pr(r) is None          # an open PR => in the loop, not dispatchable
 ]
@@ -339,7 +342,7 @@ else:
     w("- none")
 w()
 
-# ---- IN REVIEW (PR pipeline — the loop's court, not Emmett's, not dispatch) --
+# ---- IN REVIEW (PR pipeline — the loop's court, not the operator's, not dispatch) --
 w(f"## In review — PR pipeline ({len(awaiting_check)})")
 w(f"**Ready PRs awaiting checker ({len(awaiting_check)})** · _orchestrator-cycle dispatches a checker on these; pass → checked-pass, changes → resume+draft_")
 [w(pr_line(p, f"  [{p.get('reviewDecision') or 'no-review'}]")) for p in awaiting_check] or w("- none")

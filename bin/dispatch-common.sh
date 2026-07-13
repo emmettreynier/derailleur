@@ -48,7 +48,7 @@ PY
 # record_usage_reset <log> — if <log> ends in a Claude session-limit hit, parse the
 # "resets 7:40pm" prose out of the result and park the reset epoch in state/usage-reset
 # so run-cycle.sh can DEFER the next scheduled fire instead of booting into a 429.
-# These dispatches run on Emmett's subscription (no API key), so they share the 5-hour
+# These dispatches run on the operator's subscription (no API key), so they share the 5-hour
 # rolling session limit — the only reset signal Claude gives is this prose, and only
 # AFTER you've hit the wall (no way to query it ahead of time). Unparseable -> assume a
 # conservative full 5h window. Keeps the LATER of any existing marker and this one.

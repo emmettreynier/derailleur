@@ -20,6 +20,7 @@ set -euo pipefail
 
 # --- locate self + hub repo ---------------------------------------------------
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # .../orchestrator
+source "$ORCH/bin/config-common.sh"   # OPERATOR_NAME (rendered into the checker brief)
 HOOK="$ORCH/host/hooks/raw-data-guard.py"
 BRIEF_FILE="$ORCH/briefs/checker-brief.md"
 source "$ORCH/bin/dispatch-common.sh"   # classify_result / finalize_dispatch
@@ -101,6 +102,7 @@ PY
 # --- checker protocol brief (system prompt; manifest/PR-filled) ----------------
 BRIEF="$(BRIEF_PR="$PR" BRIEF_REPO="$REPO" BRIEF_ISSUE="$ISSUE" \
          BRIEF_WORKTREE="$WORKTREE" BRIEF_VERDICT_FILE="$VERDICT_FILE" \
+         BRIEF_OPERATOR_NAME="$OPERATOR_NAME" \
          render_brief "$BRIEF_FILE")"
 
 TASK="Check ready PR #$PR in $REPO (closes issue #$ISSUE). Verify it against the issue's acceptance criteria, emit the verdict JSON to $VERDICT_FILE, post your PR review, and route per your brief."
