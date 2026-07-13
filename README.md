@@ -5,23 +5,18 @@
 # derailleur
 
 A local, autonomous system that dispatches GitHub-issue work to headless Claude Code
-workers, verifies it with an LLM checker, and surfaces only the decisions that need
-you — so your time goes to research judgment instead of babysitting a session and
-hitting "1".
+workers, verifies it with an LLM checker, and surfaces only the decisions that need you.
 
 **The problem it solves:** without it, you babysit a single Claude session — mostly
 waiting, approving tool calls — and fill the waiting by opening more sessions in other
 projects, paying a heavy cross-project context-switch cost. Derailleur inverts that:
-agents grind in the background on well-specified GitHub issues while you do value-add
+agents work in the background on well-specified GitHub issues while you do value-add
 work, and you engage in batched, per-project review windows instead.
 
 GitHub is the only source of truth (issues, PRs, labels, comments, board fields) — the
 ledger, logs, and digest are disposable derivatives regenerated from it, so a crash
 loses nothing. A human merge gate is non-negotiable: nothing in this system merges a
 PR, that's always you.
-
-Split out of `project-management-v2/orchestrator`
-([issue #26](https://github.com/emmettreynier/project-management-v2/issues/26)).
 
 ## Getting started
 

@@ -2,18 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What this is
+## Start here
 
-Derailleur is a local, autonomous system that dispatches GitHub-issue work to headless
-Claude Code workers, verifies it with an LLM checker, and surfaces only the decisions
-that need Emmett. It is pure bash + python glue around `gh`/`jq` and the `claude` CLI —
-there is no application code, build step, package manager, or test suite.
+The README is imported below, so you already have what the system does, install/onboarding
+steps, and common commands — no need to open it separately.
 
-**Read [README.md](README.md) first** for what the system does, install/onboarding
-steps, and common commands. **Read [design.md](design.md)** before touching the
-dispatch loop, checker routing, or the safety model — it's the full design record
-(core principles, actor model, label vocabulary, safety layers, state & durability)
-and this file does not repeat it.
+@README.md
+
+**[design.md](design.md) is the most important document for changing behavior — read it**
+before touching the dispatch loop, checker routing, or the safety model. It's the full
+design record (core principles, actor model, label vocabulary, safety layers, state &
+durability); this file does not repeat it, and it is *not* auto-loaded, so read it on demand.
 
 ## Conventions and gotchas specific to working on this codebase
 
