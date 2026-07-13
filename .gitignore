@@ -3,5 +3,10 @@ ledger.md
 logs/
 state/
 
+# Per-project manifests are machine-specific (real repo names, local clone/data
+# paths, confidentiality notes) — kept on disk, never tracked. The tracked, sanitized
+# shape lives in templates/project.yml; new-project.sh scaffolds one from it.
+projects/*.yml
+
 # macOS
 .DS_Store
