@@ -28,6 +28,9 @@ WIRING (worker launch):
         }
       }
   (install.sh / new-project.sh own this wiring; ORCH_MANIFEST is set per dispatch.)
+  The launcher may also export ORCH_LOGS_DIR (the orchestrator's own logs dir); it is an
+  always-writable carveout so the checker can drop its verdict JSON there even when a
+  self-hosting manifest's raw_resolved blankets the whole live clone (logs/ included).
 
 FAIL-SAFE: if the manifest can't be resolved, the universal checks still run; only the
 raw-path checks are skipped. A denial emits a PreToolUse `permissionDecision: deny`.
@@ -139,17 +142,29 @@ def load_protected_prefixes() -> list[str]:
 
 
 def load_writable_prefixes() -> list[str]:
-    """Canonical `output_paths` prefixes that stay WRITABLE even when nested
-    under a protected raw tree — an explicit allow-carveout over the raw
-    denylist. Needed when a repo's writable outputs live *inside* a shared data
-    tree (e.g. per-survey outputs/ + results/ under a Dropbox-symlinked data
-    dir): raw_resolved blanket-protects the tree; these dirs punch back through.
+    """Canonical prefixes that stay WRITABLE even when nested under a protected
+    raw tree — an explicit allow-carveout over the raw denylist. Two sources:
+
+      1. `ORCH_LOGS_DIR` (env, set by the launcher) — the orchestrator's own
+         logs dir. The checker writes its verdict JSON there; that dir is
+         orchestrator RUNTIME STATE, never a project's raw data, so it must stay
+         writable even when a self-hosting manifest's `raw_resolved` blankets the
+         whole live clone (logs/ included). Applied regardless of manifest.
+      2. manifest `output_paths` — needed when a repo's writable outputs live
+         *inside* a shared data tree (e.g. per-survey outputs/ + results/ under a
+         Dropbox-symlinked data dir): raw_resolved blanket-protects the tree;
+         these dirs punch back through.
+
     Author responsibility: never list a path that overlaps real raw data."""
+    prefixes = []
+    logs_dir = os.environ.get("ORCH_LOGS_DIR")
+    if logs_dir:
+        prefixes.append(os.path.realpath(os.path.expanduser(logs_dir)))
     r = _manifest_reader()
-    if not r:
-        return []
-    data_root, _scalar, list_items = r
-    return [canon(p, data_root) for p in list_items("output_paths") if p]
+    if r:
+        data_root, _scalar, list_items = r
+        prefixes += [canon(p, data_root) for p in list_items("output_paths") if p]
+    return prefixes
 
 
 # ---- detection -------------------------------------------------------------

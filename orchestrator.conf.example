@@ -1,0 +1,34 @@
+# orchestrator.conf — per-operator identity for this derailleur instance.
+#
+# Copy this file to `orchestrator.conf` (gitignored) and fill in your own values.
+# The scripts source it to learn who they're running as, so a labmate can run
+# their own instance without editing any code:
+#
+#     cp orchestrator.conf.example orchestrator.conf
+#     $EDITOR orchestrator.conf
+#
+# Every field is required; a script aborts with guidance if any is left blank.
+# Shell-sourced, so quote values with spaces and don't put a space around `=`.
+
+# Display name of the human operator. Used in the orchestrator/checker briefs
+# ("the orchestrator for <name>'s research work") and the board digest's
+# "Needs <name>" section header. Free text — spaces are fine.
+OPERATOR_NAME="Your Name"
+
+# Your GitHub handle WITHOUT the leading @. Used to @-mention you in the
+# escalation comments workers/checkers post when they hand a decision back.
+GITHUB_HANDLE="your-handle"
+
+# GitHub owner (user or org) whose issues/PRs this instance dispatches against.
+# Passed to `gh search --owner`. Usually the same string as GITHUB_HANDLE.
+PR_OWNER="your-handle"
+
+# launchd job label for the scheduled loop (reverse-DNS style, no spaces). Names
+# the LaunchAgent installed into ~/Library/LaunchAgents/ by `schedule.sh install`
+# and the plist rendered from host/LaunchAgents/orchestrator.plist.
+LAUNCHD_LABEL="com.your-handle.orchestrator"
+
+# Your cross-repo GitHub Projects board number (the "N" in
+# `gh project view N --owner @me`). board-digest.sh reads this board to build the
+# orchestrator's dispatchable view. Find it with `gh project list --owner @me`.
+BOARD_PROJECT="1"

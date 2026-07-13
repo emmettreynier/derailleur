@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  com.emmett.orchestrator — fires the orchestrator dispatch cycle on a weeknight
-  schedule. Canonical TEMPLATE lives here in the repo; schedule.sh renders it (substituting
-  @ORCH@ for the live repo path) into ~/Library/LaunchAgents/ and bootstraps it (portability
-  model: host bits live in-repo, but launchd needs an absolute path baked in, so the repo
-  location gets stamped in at install time — re-run './schedule.sh install' after moving
-  the repo, and 'schedule.sh status' will flag it if you forget).
+  @LABEL@ — fires the orchestrator dispatch cycle on a weeknight schedule. Canonical
+  TEMPLATE lives here in the repo with @ORCH@/@LABEL@/@HOME@ placeholders; schedule.sh
+  renders it (stamping in the live repo path, the operator's launchd label from
+  orchestrator.conf, and HOME) into ~/Library/LaunchAgents/ and bootstraps it (portability
+  model: host bits live in-repo, but launchd needs absolute paths baked in, so they get
+  stamped in at install time — re-run './schedule.sh install' after moving the repo, and
+  'schedule.sh status' will flag it if you forget).
 
   - StartCalendarInterval slots MUST match the SLOTS list in schedule.sh (that list
     drives the pmset wake chain; these entries drive the actual fire). Night-heavy
-    centers 20/23/02/05/08 to shift the grind off Emmett's daytime session-limit
+    centers 20/23/02/05/08 to shift the grind off the operator's daytime session-limit
     window — but the entries below fire 15 min EARLY (:45 of the prior hour) and the
     `--jitter` flag makes run-cycle.sh sleep a random 0–30 min, so each cycle starts
     uniformly within ±15 min of its center. That de-syncs us from other hosts' on-the
@@ -28,7 +29,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.emmett.orchestrator</string>
+  <string>@LABEL@</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -40,9 +41,9 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/Users/emmettr/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>@HOME@/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>HOME</key>
-    <string>/Users/emmettr</string>
+    <string>@HOME@</string>
   </dict>
 
   <!-- Centers 20/23/02/05/08, fired 15 min EARLY; --jitter sleeps 0–30 min -> ±15. -->

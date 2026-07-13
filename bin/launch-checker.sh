@@ -20,6 +20,7 @@ set -euo pipefail
 
 # --- locate self + hub repo ---------------------------------------------------
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # .../orchestrator
+source "$ORCH/bin/config-common.sh"   # OPERATOR_NAME (rendered into the checker brief)
 HOOK="$ORCH/host/hooks/raw-data-guard.py"
 BRIEF_FILE="$ORCH/briefs/checker-brief.md"
 source "$ORCH/bin/dispatch-common.sh"   # classify_result / finalize_dispatch
@@ -101,6 +102,7 @@ PY
 # --- checker protocol brief (system prompt; manifest/PR-filled) ----------------
 BRIEF="$(BRIEF_PR="$PR" BRIEF_REPO="$REPO" BRIEF_ISSUE="$ISSUE" \
          BRIEF_WORKTREE="$WORKTREE" BRIEF_VERDICT_FILE="$VERDICT_FILE" \
+         BRIEF_OPERATOR_NAME="$OPERATOR_NAME" \
          render_brief "$BRIEF_FILE")"
 
 TASK="Check ready PR #$PR in $REPO (closes issue #$ISSUE). Verify it against the issue's acceptance criteria, emit the verdict JSON to $VERDICT_FILE, post your PR review, and route per your brief."
@@ -109,11 +111,16 @@ TASK="Check ready PR #$PR in $REPO (closes issue #$ISSUE). Verify it against the
 # Same guard env + deny-hook as a worker, PLUS --disallowedTools strips every
 # code-mutating tool: the checker can Read + run Bash (tests/gh) but cannot Edit/Write.
 build_cmd() {
-  CMD=( env "ORCH_MANIFEST=$MANIFEST" claude -p "$TASK"
+  # ORCH_LOGS_DIR + its --add-dir let the checker write its verdict JSON to the
+  # orchestrator's own logs/ (runtime state, never project raw data) even when a
+  # self-hosting manifest's raw_resolved blankets the whole live clone. The deny-hook
+  # treats ORCH_LOGS_DIR as an always-writable carveout; --add-dir grants Layer-1 access.
+  CMD=( env "ORCH_MANIFEST=$MANIFEST" "ORCH_LOGS_DIR=$ORCH/logs" claude -p "$TASK"
         --permission-mode bypassPermissions
         --settings "$SETTINGS_JSON"
         --add-dir "$WORKTREE"
         --add-dir "$RAW_RESOLVED"
+        --add-dir "$ORCH/logs"
         --disallowedTools Edit Write NotebookEdit
         --max-budget-usd "$BUDGET"
         --append-system-prompt "$BRIEF"
@@ -131,7 +138,7 @@ if [ "$DRY" = 1 ]; then
 #   worktree      : $WORKTREE   (branch: $BRANCH)
 #   raw (RO)      : $RAW_RESOLVED   <- --add-dir + deny-hook protected
 #   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)
-#   verdict file  : $VERDICT_FILE
+#   verdict file  : $VERDICT_FILE   <- $ORCH/logs writable (carveout + --add-dir)
 #   budget cap    : \$$BUDGET   fallback: $FALLBACK
 #   log           : $LOG
 #
