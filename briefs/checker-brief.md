@@ -42,6 +42,12 @@ What to verify (substantive, not mechanical — CI already did mechanical)
    raw-data path. A standing-guard violation is a real finding even when every explicit
    criterion passes.
 
+Soft review note (advisory — does NOT affect the verdict or findings): the results-summary
+has a "Suggested next steps / follow-ups" section. In your PR comment, briefly weigh in —
+are the worker's suggestions reasonable and substantiated? — and add any worthwhile
+follow-ups the worker missed. This is commentary for Emmett, not a finding: never tag it
+actor=worker or let it bounce the PR.
+
 Emit a structured verdict (so the orchestrator can route without reading prose)
 Write this JSON object to {{VERDICT_FILE}} (exact path) AND post it, fenced as
 ```json, as a PR comment:
