@@ -26,10 +26,25 @@
 set -euo pipefail
 
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # .../orchestrator
+TEMPLATE="$ORCH/templates/project.yml"
 
 note() { printf '%s\n' "$*"; }
 warn() { printf '⚠ %s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# Render templates/project.yml into a manifest: strip the leading HTML-comment header,
+# then substitute every {{TOKEN}} from the matching MANIFEST_<TOKEN> env var (same
+# {{TOKEN}} convention the launchers use for briefs/*-brief.md). Keeps the manifest
+# shape in one tracked file instead of a heredoc buried here.
+render_manifest() {
+  python3 - "$1" <<'PY'
+import os, re, sys
+text = re.sub(r'^<!--.*?-->\n', '', open(sys.argv[1]).read(), count=1, flags=re.S)
+sys.stdout.write(re.sub(r'{{(\w+)}}',
+                        lambda m: os.environ.get('MANIFEST_' + m.group(1), m.group(0)),
+                        text))
+PY
+}
 
 # --- args ---------------------------------------------------------------------
 OWNER_REPO="${1:?usage: new-project.sh <owner/repo> [--archetype ...] [--clone ...] [--worktrees ...]}"
@@ -60,6 +75,7 @@ esac
 
 command -v gh  >/dev/null 2>&1 || die "gh not found — run bin/install.sh first."
 command -v git >/dev/null 2>&1 || die "git not found — run bin/install.sh first."
+[ -f "$TEMPLATE" ] || die "manifest template missing: $TEMPLATE"
 
 # --- 1. labels ----------------------------------------------------------------
 note "==> labels"
@@ -86,40 +102,17 @@ MANIFEST="$ORCH/projects/$SLUG.yml"
 if [ -f "$MANIFEST" ]; then
   note "==> manifest exists, leaving untouched: $MANIFEST"
 else
-  note "==> scaffolding manifest: $MANIFEST"
+  note "==> scaffolding manifest from template: $MANIFEST"
   # Use literal ~ in the written paths (portable across machines/users); the
   # launchers expand ~ at read time. Reduce an absolute $HOME prefix back to ~.
   clone_w="${CLONE/#$HOME/~}"
   wt_w="${WORKTREES/#$HOME/~}"
-  cat > "$MANIFEST" <<EOF
-# Per-project manifest — the onboarding unit. Version-controlled = portable.
-# Read by the raw-data deny-hook and the dispatch tooling.
-# Scaffolded by new-project.sh — FILL THE TODOs before the first real dispatch.
-
-repo: $OWNER_REPO
-project: TODO                   # board "Project" field value (Water/Pesticides/Climate/Energy/Other)
-archetype: $ARCHETYPE           # git-native | dropbox-native
-
-# Worker git workspace (outside Dropbox).
-working_clone: $clone_w
-worktrees_dir: $wt_w
-
-# Data layout — data/ is machine-local and gitignored; the launcher bootstraps
-# each worktree with data/raw (READ-ONLY symlink) + writable output dirs.
-data_root: $clone_w/data
-raw_resolved: TODO              # absolute path data/raw points at (the read-only raw tree)
-dropbox_pinned_offline: false  # true (dropbox-native) once raw is pinned "Available offline"
-
-# READ-ONLY. The deny-hook blocks any write/delete whose canonical (symlink-resolved)
-# path is under raw/. Paths relative to data_root unless absolute.
-raw_paths:
-  - raw/         # the entire raw tree, no exceptions
-
-# Writable worker outputs. Documentation + worktree bootstrap (dirs to create);
-# the deny-hook is a denylist (block raw_paths, allow the rest), so not enforcement.
-output_paths:
-  - data/results/
-EOF
+  MANIFEST_REPO="$OWNER_REPO" \
+  MANIFEST_ARCHETYPE="$ARCHETYPE" \
+  MANIFEST_WORKING_CLONE="$clone_w" \
+  MANIFEST_WORKTREES_DIR="$wt_w" \
+  MANIFEST_DATA_ROOT="$clone_w/data" \
+    render_manifest "$TEMPLATE" > "$MANIFEST"
 fi
 
 cat <<EOF

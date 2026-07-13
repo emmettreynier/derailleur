@@ -1,0 +1,68 @@
+<!--
+templates/project.yml — the canonical per-project manifest shape (the onboarding unit).
+
+This is the single source of truth for what a manifest looks like. `bin/new-project.sh`
+renders it into `projects/<slug>.yml` at onboard time, substituting the {{TOKEN}}
+placeholders below (same {{TOKEN}} convention as briefs/*-brief.md); you can also copy
+it by hand and fill it in. Real manifests live in projects/ and are gitignored — only
+this sanitized template is tracked.
+
+All values below are placeholders. Fill the {{TOKENS}} (new-project.sh does this for you)
+and resolve every `TODO:` before the first real dispatch.
+-->
+# Per-project manifest — the onboarding unit. Read by the raw-data deny-hook and the
+# dispatch tooling. Scaffolded by new-project.sh — FILL THE TODOs before first dispatch.
+
+repo: {{REPO}}                  # owner/repo the worker/checker operate on
+project: TODO                   # board "Project" field value (e.g. Water/Pesticides/Climate/Energy/Other)
+
+# archetype — how the repo relates to its data (see README "Onboard a project"):
+#   git-native      (preferred) repo is git-only and lives OUTSIDE any cloud-sync
+#                   folder; large or confidential data live elsewhere and are symlinked
+#                   into data/. Worktrees are trivial; raw is protected read-only by
+#                   file perms or the deny-hook.
+#   dropbox-native  (legacy/coauthored) the canonical repo lives inside a cloud-sync
+#                   folder; workers operate from an out-of-sync working clone, and raw
+#                   data is pinned "available offline" + protected by the deny-hook.
+#                   Use only when coauthors require the synced layout.
+archetype: {{ARCHETYPE}}        # git-native | dropbox-native
+
+# Worker git workspace — the working clone lives OUTSIDE any cloud-sync folder so git
+# and the sync client never fight over the same tree. Paths use literal ~ (portable
+# across machines/users); the launchers expand ~ at read time.
+working_clone: {{WORKING_CLONE}}
+worktrees_dir: {{WORKTREES_DIR}}
+
+# Data layout — data/ is machine-local and gitignored; each environment provides its
+# own, so nothing here is tracked in the repo. The launcher bootstraps each worktree
+# with:
+#   data/raw     -> symlink to raw_resolved   (READ-ONLY)
+#   data/results -> writable worker output
+# raw_resolved keys the deny-hook, so raw protection holds regardless of how data/ is
+# provided on a given machine.
+data_root: {{DATA_ROOT}}
+raw_resolved: TODO              # absolute path data/raw points at (the read-only raw tree)
+dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "available offline"
+
+# ── Confidentiality (READ before a live dispatch on a repo with confidential data) ──
+# The deny-hook blocks WRITES/DELETES under the raw prefixes below; it does NOT block
+# reads. READ-protection of sensitive data comes from --add-dir scoping: a worker can
+# only read the worktree + raw_resolved. If a repo has confidential inputs (e.g.
+# protected-use microdata), point raw_resolved at the PUBLIC raw only and NEVER
+# --add-dir or symlink the confidential tree into a worktree — that, not the deny-hook,
+# is what keeps a worker from reading it. Listing a confidential path in raw_paths is
+# defense-in-depth (blocks writes if the symlink is ever present), not read-protection.
+
+# READ-ONLY. The deny-hook blocks any write/delete whose canonical (symlink-resolved)
+# path is under one of these prefixes. Paths are relative to data_root unless absolute.
+# Use [] if raw_resolved itself is blanket write-protected and you only carve out
+# writable subdirs via output_paths below.
+raw_paths:
+  - raw/                        # the entire raw tree, no exceptions
+
+# Writable worker outputs. Two roles: (1) documentation + worktree bootstrap (dirs the
+# launcher creates); (2) explicit allow-carveouts over the raw denylist above — needed
+# when a repo's writable outputs live INSIDE a shared raw/data tree (the deny-hook is a
+# denylist: block raw_paths, allow the rest, re-allow these).
+output_paths:
+  - data/results/               # worker-generated outputs / intermediate artifacts
