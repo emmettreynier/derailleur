@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # board-digest.sh — deterministic board-state report for the orchestrator.
 #
-# Reads the FSE Research board (user project 3) + open ready-for-review PRs +
+# Reads the operator's cross-repo board (BOARD_PROJECT, from orchestrator.conf) +
+# open ready-for-review PRs +
 # recently-closed issues, diffs against the ledger, and emits a compact
 # markdown digest. No LLM, no judgment: the script REPORTS, the orchestrator
 # DECIDES what to dispatch. Safe to run standalone to eyeball board state.
@@ -13,13 +14,13 @@
 #   DONE_DAYS   how many days back to show closed items (default 7)
 set -euo pipefail
 
-PROJECT=3
 OWNER="@me"
 DONE_DAYS="${DONE_DAYS:-7}"
 ORCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LEDGER="$ORCH_DIR/ledger.md"
-# Operator identity (PR_OWNER, OPERATOR_NAME, …) comes from orchestrator.conf.
+# Operator identity (PR_OWNER, OPERATOR_NAME, BOARD_PROJECT, …) comes from orchestrator.conf.
 source "$ORCH_DIR/bin/config-common.sh"
+PROJECT="$BOARD_PROJECT"
 
 command -v gh >/dev/null  || { echo "board-digest: gh not found" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "board-digest: python3 not found" >&2; exit 1; }

@@ -5,8 +5,8 @@
 #
 # Reads $ORCH/orchestrator.conf (gitignored, per-operator; scaffolded from the tracked
 # orchestrator.conf.example by install.sh). Exports OPERATOR_NAME / GITHUB_HANDLE /
-# PR_OWNER / LAUNCHD_LABEL. Fails loud if the conf is missing or any field is blank so
-# no dispatch silently runs under someone else's identity.
+# PR_OWNER / LAUNCHD_LABEL / BOARD_PROJECT. Fails loud if the conf is missing or any
+# field is blank so no dispatch silently runs under someone else's identity.
 
 _conf_root="${ORCH:-${ORCH_DIR:-}}"
 _conf_file="$_conf_root/orchestrator.conf"
@@ -25,6 +25,7 @@ _conf_missing=""
 [ -n "${GITHUB_HANDLE:-}" ] || _conf_missing="$_conf_missing GITHUB_HANDLE"
 [ -n "${PR_OWNER:-}" ]      || _conf_missing="$_conf_missing PR_OWNER"
 [ -n "${LAUNCHD_LABEL:-}" ] || _conf_missing="$_conf_missing LAUNCHD_LABEL"
+[ -n "${BOARD_PROJECT:-}" ] || _conf_missing="$_conf_missing BOARD_PROJECT"
 
 if [ -n "$_conf_missing" ]; then
   {
@@ -39,4 +40,4 @@ if [ -n "$_conf_missing" ]; then
   exit 1
 fi
 
-export OPERATOR_NAME GITHUB_HANDLE PR_OWNER LAUNCHD_LABEL
+export OPERATOR_NAME GITHUB_HANDLE PR_OWNER LAUNCHD_LABEL BOARD_PROJECT

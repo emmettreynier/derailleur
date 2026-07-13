@@ -83,7 +83,7 @@ if [ -f "$ORCH/orchestrator.conf" ]; then
 else
   cp "$ORCH/orchestrator.conf.example" "$ORCH/orchestrator.conf"
   warn "scaffolded orchestrator.conf from the example — EDIT it with your identity"
-  warn "  (OPERATOR_NAME / GITHUB_HANDLE / PR_OWNER / LAUNCHD_LABEL) before dispatching."
+  warn "  (OPERATOR_NAME / GITHUB_HANDLE / PR_OWNER / LAUNCHD_LABEL / BOARD_PROJECT) before dispatching."
 fi
 
 # --- next steps (opt-in; this script does not run them) -----------------------

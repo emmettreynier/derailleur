@@ -27,3 +27,8 @@ PR_OWNER="your-handle"
 # the LaunchAgent installed into ~/Library/LaunchAgents/ by `schedule.sh install`
 # and the plist rendered from host/LaunchAgents/orchestrator.plist.
 LAUNCHD_LABEL="com.your-handle.orchestrator"
+
+# Your cross-repo GitHub Projects board number (the "N" in
+# `gh project view N --owner @me`). board-digest.sh reads this board to build the
+# orchestrator's dispatchable view. Find it with `gh project list --owner @me`.
+BOARD_PROJECT="1"

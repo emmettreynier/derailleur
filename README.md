@@ -42,9 +42,9 @@ PR, that's always you.
    in-repo host hooks are executable, creates `logs/` + `state/`, and scaffolds
    `orchestrator.conf` from `orchestrator.conf.example`. Idempotent.
 5. Fill in `orchestrator.conf` with your identity (`OPERATOR_NAME`, `GITHUB_HANDLE`,
-   `PR_OWNER`, `LAUNCHD_LABEL`) — it's gitignored and per-operator, so a labmate runs
-   their own instance without editing code. Every field is required; the scripts abort
-   with guidance if any is blank.
+   `PR_OWNER`, `LAUNCHD_LABEL`, `BOARD_PROJECT`) — it's gitignored and per-operator, so a
+   labmate runs their own instance without editing code. Every field is required; the
+   scripts abort with guidance if any is blank.
 6. Verify: `claude --version`, then a dry run: `./bin/launch-orchestrator.sh --dry-run`.
 
 This does **not** register anything in `~/.claude/` — the host hooks are passed to
