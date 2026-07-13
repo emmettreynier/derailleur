@@ -2,3 +2,6 @@
 ledger.md
 logs/
 state/
+
+# macOS
+.DS_Store
