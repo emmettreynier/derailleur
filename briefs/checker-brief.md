@@ -33,6 +33,20 @@ What to verify (substantive, not mechanical — CI already did mechanical)
    re-deriving what CI already verified.
 4. Sanity-check the outputs themselves (plausible magnitudes, no obvious errors),
    the kind of read a research advisor gives — not a line-by-line style review.
+5. Standing guards — verify these on EVERY PR, independent of whether the issue's
+   acceptance criteria mention them: (1) no secrets, credentials, absolute local paths
+   (`/Users/...`, `/home/...`), or PII in the diff; (2) the changed entry point runs
+   clean from a fresh session; (3) seeds set wherever sampling/simulation/bootstrap was
+   introduced; (4) docs current (affected docs updated or a stated "no docs needed"
+   reason); (5) raw inputs untouched — the diff changes nothing under the repo's declared
+   raw-data path. A standing-guard violation is a real finding even when every explicit
+   criterion passes.
+
+Soft review note (advisory — does NOT affect the verdict or findings): the results-summary
+has a "Suggested next steps / follow-ups" section. In your PR comment, briefly weigh in —
+are the worker's suggestions reasonable and substantiated? — and add any worthwhile
+follow-ups the worker missed. This is commentary for Emmett, not a finding: never tag it
+actor=worker or let it bounce the PR.
 
 Emit a structured verdict (so the orchestrator can route without reading prose)
 Write this JSON object to {{VERDICT_FILE}} (exact path) AND post it, fenced as
@@ -71,6 +85,10 @@ Then pick the verdict from (criteria met?) + (any worker-actionable finding?):
                                  the verification, access is missing, spec is unintelligible).
 - failure_class: hard = a real contract failure; transient = flaky infra (e.g. CI runner
   died) a retry would clear; none = no failure.
+
+A standing-guard violation (checks 1–5 above) is always actor=worker, so it CAN bounce a PR
+whose explicit criteria all pass: changes_requested when the explicit criteria otherwise
+pass, or fail when the guard failure means an output/criterion is itself unmet.
 
 Do NOT bounce an actor=emmett item to a worker — that causes an endless worker↔checker
 loop on a call only Emmett can make. If the only remaining findings are actor=emmett,

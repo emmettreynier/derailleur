@@ -31,6 +31,20 @@ Closes #
 
 <!-- Assumptions made, and anything you'd want probed. -->
 
+## Suggested next steps / follow-ups
+
+<!-- Forward-looking, out of scope for THIS issue: things you noticed while working that
+     are worth doing next — a follow-up issue, a refactor, a robustness check, a related
+     question. These are suggestions for Emmett, not commitments. "none" is a fine answer. -->
+
+## Standing guards
+
+<!-- Attest to each self-check (held on every PR, regardless of the issue). -->
+- Secrets / absolute paths / PII: none in diff.
+- Changed entry point runs clean from a fresh session: <command + result>.
+- Seeds: <set where sampling/simulation/bootstrap introduced, or "n/a — none introduced">.
+- Docs: <updated: files> OR <no docs needed: reason>.
+
 ## Outcome
 
 <!-- Typed self-report: pick one.

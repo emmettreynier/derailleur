@@ -138,6 +138,8 @@ Workers run unattended (no human to approve prompts), so guardrails are **defens
 
 The **orchestrator** gets its own guardrails: board-only (no `--add-dir` to any data), no `Edit`/`Write`, its own budget cap — it can dispatch and label, nothing else.
 
+**Standing guards (hygiene backstop, brief-layer)** *(added 2026-07-13)*. Beyond the destruction-safety layers above, both briefs carry a fixed integrity/hygiene bar every PR must clear regardless of what its issue asked for — because the guards live in the protocol layer, not individual issues: (1) no secrets/credentials/absolute local paths/PII in the diff, (2) the changed entry point runs clean from a fresh session, (3) seeds set where sampling/simulation/bootstrap is introduced, (4) affected docs updated (or a stated "no docs needed" reason), (5) raw inputs untouched. The worker self-verifies 1–4 and attests in the results-summary (guard 5 is already covered worker-side by the raw-data rules + deny-hook); the checker independently verifies 1–5 on every PR, and a violation is an `actor=worker` finding that bounces the PR (`changes_requested`/`fail`) even when the issue's explicit criteria all pass. This is model-trusted on the worker side and independently checked — not a harness-enforced layer.
+
 ## Running the cycle (operator manual)
 
 These can all be run by hand; the `launchd` schedule (next section) just fires `bin/run-cycle.sh` — the wrapper around `bin/orchestrator-cycle.sh` — at its slots. All scripts locate their own paths, so they work from any directory.
