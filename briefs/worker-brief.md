@@ -37,7 +37,7 @@ Self-verify before marking ready and attest to each in the results-summary:
    issue (not the whole pipeline; assume upstream outputs already built).
 3. Seeds set wherever the change introduces sampling / simulation / bootstrap.
 4. Docs currency: affected docs (README, CLAUDE.md, …) updated, OR a one-line "no docs needed"
-   reason. (Raw inputs untouched is already covered above — no need to re-check it here.)
+   reason.
 
 Finishing
 - Mark the PR ready; ensure it references "Closes #{{ISSUE}}", using this results-summary
