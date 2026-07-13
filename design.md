@@ -140,69 +140,27 @@ The **orchestrator** gets its own guardrails: board-only (no `--add-dir` to any 
 
 **Standing guards (hygiene backstop, brief-layer)** *(added 2026-07-13)*. Beyond the destruction-safety layers above, both briefs carry a fixed integrity/hygiene bar every PR must clear regardless of what its issue asked for — because the guards live in the protocol layer, not individual issues: (1) no secrets/credentials/absolute local paths/PII in the diff, (2) the changed entry point runs clean from a fresh session, (3) seeds set where sampling/simulation/bootstrap is introduced, (4) affected docs updated (or a stated "no docs needed" reason), (5) raw inputs untouched. The worker self-verifies 1–4 and attests in the results-summary (guard 5 is already covered worker-side by the raw-data rules + deny-hook); the checker independently verifies 1–5 on every PR, and a violation is an `actor=worker` finding that bounces the PR (`changes_requested`/`fail`) even when the issue's explicit criteria all pass. This is model-trusted on the worker side and independently checked — not a harness-enforced layer.
 
-## Running the cycle (operator manual)
+## Running the cycle
 
-These can all be run by hand; the `launchd` schedule (next section) just fires `bin/run-cycle.sh` — the wrapper around `bin/orchestrator-cycle.sh` — at its slots. All scripts locate their own paths, so they work from any directory.
-
-**One full pass** — prune the ledger + reclaim merged worktrees → dispatch checkers on ready PRs → boot the headless orchestrator to dispatch workers up to the cap:
-
-```bash
-./bin/orchestrator-cycle.sh              # real pass — dispatches for real
-./bin/orchestrator-cycle.sh --dry-run    # PLAN only: launchers stubbed, no labels touched, nothing spent downstream
-```
-
-Tunable by env var (all have defaults; prefix the call, e.g. `WORKER_BUDGET=6 ./bin/orchestrator-cycle.sh`):
-
-| Var | Default | What it does |
-|---|---|---|
-| `CAP` | `2` | Max workers in flight at once (tied to *your* review bandwidth, not CPU). |
-| `BUDGET` | `0.50` | Orchestrator session budget (USD). It only reads the digest + routes — raise it (e.g. `2`) if a candidate-heavy cycle gets cut off mid-decision. |
-| `WORKER_BUDGET` | `10.00` | Per-worker session budget, threaded into the worker dispatch line. |
-| `CHECKER_BUDGET` | `3.00` | Per-checker session budget, threaded into each checker call. |
-| `CHECKER_LIMIT` | `4` | Max checker rounds *per review generation* (reset once Emmett reviews) before escalating to `needs-input` (ping-pong backstop). |
-| `WORKER_LIMIT` | `4` | Max consecutive interrupted worker attempts on one issue (reset by any other comment) before `bin/ledger-prune.sh` escalates it to `needs-input` instead of letting it redispatch again — a runaway-retry backstop, the worker-side mirror of `CHECKER_LIMIT`. |
-
-**Preview the digest** the orchestrator boots with — deterministic, free, dispatches nothing:
-
-```bash
-./bin/launch-orchestrator.sh --dry-run   # prints the board digest (the orchestrator's whole view)
-```
-
-**Dispatch one role directly** (bypasses the cycle's intake gate — you've already decided). Both reuse the worktree idempotently and run detached by default:
-
-```bash
-./bin/launch-worker.sh  <repo-slug> <issue#>  [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
-./bin/launch-checker.sh <repo-slug> <pr#>     [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
-# e.g. land a resume issue with extra headroom, watched live:
-./bin/launch-worker.sh solar-income 1 --budget 5 --foreground
-```
-
-- `--budget` (arg) beats the `*_BUDGET` env var beats the launcher default.
-- `--dry-run` prints the fully-assembled, guarded `claude` command and exits (spends nothing).
-
-**Reclaim worktree disk.** The cycle already runs `--auto` first each pass, so usually you needn't. Run it raw to pick interactively:
-
-```bash
-./bin/worktree-prune.sh                 # interactive: list every worktree (disk + status), pick which to remove
-./bin/worktree-prune.sh --auto --dry-run  # report which MERGED+clean worktrees auto mode would remove
-./bin/worktree-prune.sh --auto           # non-interactive: remove merged+clean, report the rest
-./bin/worktree-prune.sh --auto --force   # also drop ones blocked solely by stray untracked files
-```
-
-- Interactive mode lets you delete *any* worktree (unmerged / in-flight included) behind a per-item confirmation; auto mode only ever removes **merged + clean** ones.
-- Neither mode removes a worktree with **local-only state** (uncommitted edits / unpushed commits) without an explicit confirm; `--force` only overrides leftover *untracked* files, never commits.
-- `--foreground` tees output to the terminal and supervises; default detaches and logs to `logs/<slug>-issue-N.log` (worker) / `-pr-N.log` (checker). Logs only fill when the session *ends* (`--output-format json` buffers), so a 0-byte log means still-running or hard-killed.
+Every command for running the system by hand — one full pass, previewing the board
+digest, dispatching a single worker/checker, reclaiming worktree disk — plus the
+tunable env vars (`CAP`, `BUDGET`, `WORKER_BUDGET`, `CHECKER_BUDGET`, `CHECKER_LIMIT`,
+`WORKER_LIMIT`) lives in the [README](README.md) (*Usage*), which is the single source
+of truth for operating the system. This design doc explains only *why* the cycle is
+shaped as it is: the ledger/worktree prune → checkers → workers ordering falls out of
+state & durability, the concurrency cap out of the inbox model, and the per-role
+budgets out of the safety model — each covered in its own section here.
 
 ## Scheduling & power
 
-The schedule fires the **cycle**, not a bare `claude -p`. The real entrypoint is `bin/run-cycle.sh` (a launchd-safe wrapper around `bin/orchestrator-cycle.sh`); `bin/schedule.sh` installs/manages the launchd agent and the wake chain.
+The schedule fires the **cycle**, not a bare `claude -p`. The real entrypoint is `bin/run-cycle.sh` (a launchd-safe wrapper around `bin/orchestrator-cycle.sh`); `bin/schedule.sh` installs/manages the launchd agent and the wake chain. (The `bin/schedule.sh` subcommands themselves — `install`/`live`/`plan-only`/`run`/`status`/`pause`/`resume`/`uninstall` — are documented in the [README](README.md) *Enable the scheduled loop* / *Day-to-day scheduler commands*; this section is the design rationale behind them.)
 
 - **Wake:** a macOS **`launchd`** agent (`com.emmett.orchestrator`, source in `host/LaunchAgents/`, symlinked into `~/Library/LaunchAgents/` by `bin/schedule.sh install`) fires `bin/run-cycle.sh` at fixed `StartCalendarInterval` slots — **night-heavy centers 20/23/02/05/08** — to shift the grind off the daytime session-limit window. launchd (over `cron`) runs a missed slot once on wake.
 - **Jitter (±15 min):** launchd has no native jitter, so synchronized on-the-hour fires would stampede shared servers in lockstep with everyone else's cron. The plist therefore fires **15 min early** (:45 of the prior hour) and passes `--jitter`, which makes `bin/run-cycle.sh` sleep a random **0–30 min** (`caffeinate -i` holds the Mac awake through it) — so each cycle actually starts uniformly within **±15 min of its center**. Jitter applies only to scheduled fires; manual `bin/schedule.sh run` and any `--dry-run` are immediate. Window is `JITTER_MAX_SECS` (default 1800).
 - **`bin/run-cycle.sh`** does the three things a bare schedule gets wrong: (1) sets a known **PATH** (launchd's stripped env can't find `claude`/`gh`/the python.org `python3`); (2) the **usage gate** (below); (3) arms the next pmset wake so the chain self-perpetuates. It tees a human log to `logs/cycle.log`.
 - **Usage-limit gate (overnight lever):** dispatches run on Emmett's Claude **subscription** (no API key), so they share his **5-hour rolling session limit** — overnight work shifts *when* the pool is spent, freeing the daytime window (it doesn't add quota; a *weekly*-cap hit can't be helped by timing). There is **no way to query the reset ahead of time** — Claude only reveals it *reactively*, as prose in the 429 result (`"resets 7:40pm"`). `record_usage_reset` (in `bin/dispatch-common.sh`, called from `finalize_dispatch` on a worker/checker rate-limit and from `bin/run-cycle.sh` for the orchestrator session) parses that into `state/usage-reset`; `bin/run-cycle.sh` then **defers** any fire inside the exhausted window (a skipped fire costs nothing) and resumes automatically once the marker passes.
-- **Manual trigger:** `bin/schedule.sh run` (kickstarts the agent through the identical launchd path) or `bin/schedule.sh run --dry-run` (inline plan, no spend). `bin/schedule.sh status` shows agent state, next pmset wake, the gate, and the cycle-log tail.
-- **Plan-only → live (a toggle, not a plist edit):** the mode lives in `state/mode` (machine-local), which `bin/run-cycle.sh` reads on every fire; missing/non-`live` → plan-only, so a fresh install never dispatches for real until you opt in. Flip it with `bin/schedule.sh live` / `bin/schedule.sh plan-only` — no file editing, no `launchctl` reload, effective on the next cycle. An explicit `--dry-run`/`ORCH_DRY=1` still force plan-only regardless. `bin/schedule.sh pause`/`resume` stop and restart firing entirely (lighter than uninstall; for being away).
+- **Manual trigger:** a hand-run cycle kickstarts the agent through the *identical* launchd path (not a separate code path), so what you test by hand is what fires on the timer; a `--dry-run` variant plans inline without spending. Status inspection surfaces the same state the scheduler acts on — agent state, next pmset wake, the usage gate, and the cycle-log tail.
+- **Plan-only → live is a toggle, not a plist edit:** the mode lives in `state/mode` (machine-local), which `bin/run-cycle.sh` reads on every fire; missing/non-`live` → plan-only, so a fresh install never dispatches for real until you opt in. Flipping it (via the README's `live`/`plan-only` subcommands) needs no file editing and no `launchctl` reload — effective on the next cycle. An explicit `--dry-run`/`ORCH_DRY=1` still forces plan-only regardless. Pausing/resuming stop and restart firing entirely (lighter than uninstall; for being away).
 - **Concurrency cap:** start at **2–3** workers (`CAP`), tied to *your review bandwidth*, not CPU.
 - **Sleep & power (honest):** launchd won't wake a sleeping Mac on its own. `bin/schedule.sh install` seeds **`pmset`** wakes — a daily `repeat wakeorpoweron MTWRF` bootstrap plus a self-arming one-off `schedule wake` before each slot (pmset holds only one *repeat*/day, hence the chain). Needs the Mac **on power**; a closed lid still sleeps between wakes, which is fine — it wakes ~2 min before each slot, fires, and sleeps again. In-flight workers freeze if the Mac sleeps mid-run; the next cycle recovers them via worktree reuse + retained label. True 24/7-while-closed would want a dedicated always-on host.
 
@@ -267,16 +225,16 @@ Skills encode "how Emmett likes task-type X done," lifting global conventions (`
 
 The system splits into portable and machine-local parts; the goal is that a new machine (or project) is reproduced from the repo + GitHub, never from memory.
 
-- **Portable (this repo + GitHub):** design, scripts, templates, briefs, hooks, skills, per-project manifests — plus GitHub-side state (labels, the board view, branch settings).
-- **Machine-local — the bits that "make it tick":** Claude Code hook/permission config (`~/.claude/settings.json`), the `launchd` plist (`~/Library/LaunchAgents/`), user skills (`~/.claude/skills/`), the out-of-Dropbox working clones, and `gh`/Dropbox auth.
+- **Portable (this repo + GitHub):** design, scripts, templates (including the sanitized per-project manifest template, `templates/project.yml`), briefs, hooks, skills — plus GitHub-side state (labels, the board view, branch settings).
+- **Machine-local — the bits that "make it tick":** Claude Code hook/permission config (`~/.claude/settings.json`), the `launchd` plist (`~/Library/LaunchAgents/`), user skills (`~/.claude/skills/`), the out-of-Dropbox working clones, `gh`/Dropbox auth, and the **filled-in per-project manifests** (`projects/*.yml`, gitignored — they carry real repo names, local clone/data paths, and confidentiality notes).
 
 To make the machine-local pieces reproducible, their canonical copies live **in the repo** (`host/`) and are linked into place by a bootstrap script:
 
-- **`bin/install.sh`** — host bootstrap: symlinks hooks/skills/plist into `~/.claude/` and `~/Library/LaunchAgents/`, checks deps (`gh`, `jq`, `claude`). New machine = clone this repo → `./bin/install.sh` → `gh auth login`.
+- **`bin/install.sh`** — host bootstrap: symlinks hooks/skills/plist into `~/.claude/` and `~/Library/LaunchAgents/`, checks deps (`gh`, `jq`, `claude`). (The new-machine sequence — clone → `install.sh` → `gh auth login` — is in the [README](README.md) *Install*.)
 - **`bin/new-project.sh <repo>`** — per-project onboarding: creates labels, ensures the board view covers it, sets up the out-of-Dropbox working clone, scaffolds the manifest.
 - **`README.md`** — getting-started guide: host + per-project checklists, including the irreducibly-manual steps (board-view membership, Dropbox "available offline" pinning, coauthor buy-in for shared-repo branch protection).
 
-**Per-project manifest** (`projects/<repo>.yml`) is the onboarding unit — repo, board Project, archetype, clone/worktree locations, data root, and the raw-path deny-list. Version-controlled, so onboarding on a new machine is `bin/new-project.sh` + an existing manifest.
+**Per-project manifest** (`projects/<repo>.yml`) is the onboarding unit — repo, board Project, archetype, clone/worktree locations, data root, and the raw-path deny-list. The manifests themselves are **machine-local (gitignored)** since they carry real repo names, local paths, and confidentiality notes; what's *tracked* is the sanitized shape in `templates/project.yml`, which `bin/new-project.sh` renders into a fresh manifest. So onboarding on a new machine is `bin/new-project.sh` (scaffold from the template) + filling its TODOs — or copying an existing manifest across by hand.
 
 **Project archetypes** (a manifest field):
 - **git-native** (preferred) — repo is git-only; `data/` is a symlink to a Dropbox location (or in-repo if small/non-restricted). Worktrees trivial; raw protected by perms or the deny-hook.

@@ -18,6 +18,11 @@ ledger, logs, and digest are disposable derivatives regenerated from it, so a cr
 loses nothing. A human merge gate is non-negotiable: nothing in this system merges a
 PR, that's always you.
 
+> **Note for labmates:** operator identity is still partly hardcoded to this repo's
+> maintainer (GitHub owner, board project number, the `launchd` label). Fully
+> parameterizing it so you can run your own instance is tracked in
+> [#4](https://github.com/emmettreynier/derailleur/issues/4).
+
 ## Getting started
 
 ### Requirements
@@ -100,6 +105,13 @@ Tunable by env var, e.g. `WORKER_BUDGET=6 ./bin/orchestrator-cycle.sh`:
 | `CHECKER_LIMIT` | `4` | Max checker rounds per review generation before escalating to `needs-input`. |
 | `WORKER_LIMIT` | `4` | Max consecutive interrupted worker attempts before escalating to `needs-input`. |
 
+To preview the board digest the orchestrator boots with — deterministic, free,
+dispatches nothing:
+
+```bash
+./bin/launch-orchestrator.sh --dry-run   # prints the board digest (the orchestrator's whole view)
+```
+
 ### Dispatch one role directly
 
 Bypasses the cycle's intake gate — use when you've already decided. Both reuse the
@@ -149,12 +161,15 @@ merge, or `needs-definition`.
 ```
 derailleur/
 ├── design.md                    Full design doc — architecture, safety model, build history
-├── projects/*.yml                Per-project manifests (the onboarding unit)
+├── projects/                     Per-project manifests (the onboarding unit)
+│   └── *.yml                        machine-local, gitignored (see templates/project.yml)
 ├── briefs/                       Role protocol briefs
 │   ├── worker-brief.md
 │   ├── checker-brief.md
 │   └── orchestrator-brief.md
-├── templates/pr-results-summary.md   The results-summary PR template workers fill in
+├── templates/
+│   ├── project.yml                  Tracked, sanitized manifest shape (new-project.sh renders it)
+│   └── pr-results-summary.md        The results-summary PR template workers fill in
 ├── host/hooks/                   PreToolUse / Stop / SessionStart hooks (the safety layer)
 ├── host/LaunchAgents/            launchd plist template for the scheduled loop
 ├── bin/                          All shell entrypoints (invoke as ./bin/<script>.sh)
