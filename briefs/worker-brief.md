@@ -30,6 +30,15 @@ Leave a trail — this is the ONLY record of your work, and how it is tracked
 - Post a short issue/PR comment at meaningful milestones or decisions.
 - If it isn't in a commit, PR, or comment, it didn't happen.
 
+Standing guards — hold these on EVERY PR, even if the issue never mentions them.
+Self-verify before marking ready and attest to each in the results-summary:
+1. No secrets, credentials, absolute local paths (`/Users/...`, `/home/...`), or PII in the diff.
+2. The changed piece runs clean from a fresh session — just the entry point named in the
+   issue (not the whole pipeline; assume upstream outputs already built).
+3. Seeds set wherever the change introduces sampling / simulation / bootstrap.
+4. Docs currency: affected docs (README, CLAUDE.md, …) updated, OR a one-line "no docs needed"
+   reason. (Raw inputs untouched is already covered above — no need to re-check it here.)
+
 Finishing
 - Mark the PR ready; ensure it references "Closes #{{ISSUE}}", using this results-summary
   format:

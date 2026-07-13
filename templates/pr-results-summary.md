@@ -31,6 +31,14 @@ Closes #
 
 <!-- Assumptions made, and anything you'd want probed. -->
 
+## Standing guards
+
+<!-- Attest to each self-check (held on every PR, regardless of the issue). -->
+- Secrets / absolute paths / PII: none in diff.
+- Changed entry point runs clean from a fresh session: <command + result>.
+- Seeds: <set where sampling/simulation/bootstrap introduced, or "n/a — none introduced">.
+- Docs: <updated: files> OR <no docs needed: reason>.
+
 ## Outcome
 
 <!-- Typed self-report: pick one.
