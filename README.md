@@ -18,11 +18,6 @@ ledger, logs, and digest are disposable derivatives regenerated from it, so a cr
 loses nothing. A human merge gate is non-negotiable: nothing in this system merges a
 PR, that's always you.
 
-> **Note for labmates:** operator identity is still partly hardcoded to this repo's
-> maintainer (GitHub owner, board project number, the `launchd` label). Fully
-> parameterizing it so you can run your own instance is tracked in
-> [#4](https://github.com/emmettreynier/derailleur/issues/4).
-
 ## Getting started
 
 ### Requirements
