@@ -57,6 +57,13 @@ behavior. Its rendered copy bakes in this checkout's absolute path, so **re-run
 location until you do. See `design.md` → *Portability & bootstrap* for the full split
 between what's portable (this repo + GitHub) and what's machine-local.
 
+Because that rendered file bakes in an absolute path, **`~/.claude/commands` must not be
+a versioned directory.** Some dotfiles setups symlink it into a git repo; if yours does,
+`install.sh` resolves the render target through symlinks and warns when it lands inside a
+work tree — heed it, because a committed `orchestrate.md` carries one machine's home
+directory and breaks `/orchestrate` on every other machine that pulls it. Either gitignore
+the file there or repoint `~/.claude/commands` somewhere unversioned.
+
 ### Onboard a project
 
 1. Choose an **archetype**: `git-native` (preferred — repo is git-only, data is a
