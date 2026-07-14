@@ -18,6 +18,10 @@ ledger, logs, and digest are disposable derivatives regenerated from it, so a cr
 loses nothing. A human merge gate is non-negotiable: nothing in this system merges a
 PR, that's always you.
 
+Why "derailleur"? Well, mostly just because I like bikes. Maybe there is some deep metaphor
+related to the shifting mechanism which allows a cyclist to ride at similar effort 
+levels across many different speeds 🤷🚲 
+
 ## Getting started
 
 ### Requirements
