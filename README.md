@@ -39,19 +39,26 @@ PR, that's always you.
 2. Install the dependencies above.
 3. `gh auth login`.
 4. `./bin/install.sh` — dep-checks (`gh`/`jq`/`claude`/`python3`/`git`), asserts the
-   in-repo host hooks are executable, creates `logs/` + `state/`, and scaffolds
-   `orchestrator.conf` from `orchestrator.conf.example`. Idempotent.
+   in-repo host hooks are executable, creates `logs/` + `state/`, scaffolds
+   `orchestrator.conf` from `orchestrator.conf.example`, and renders the opt-in
+   `/orchestrate` slash command into `~/.claude/commands/` (the one, narrow
+   `~/.claude/` carve-out — see below). Idempotent.
 5. Fill in `orchestrator.conf` with your identity (`OPERATOR_NAME`, `GITHUB_HANDLE`,
    `PR_OWNER`, `LAUNCHD_LABEL`, `BOARD_PROJECT`) — it's gitignored and per-operator, so a
    labmate runs their own instance without editing code. Every field is required; the
    scripts abort with guidance if any is blank.
 6. Verify: `claude --version`, then a dry run: `./bin/launch-orchestrator.sh --dry-run`.
 
-This does **not** register anything in `~/.claude/` — the host hooks are passed to
-each dispatch by in-repo path, so your normal interactive Claude Code sessions
-elsewhere on the machine stay untouched. See `design.md` → *Portability & bootstrap*
-for the full split between what's portable (this repo + GitHub) and what's
-machine-local.
+This registers **no hooks and no default behavior** in `~/.claude/` — the worker/checker
+safety hooks are passed to each dispatch by in-repo path, so your normal interactive
+Claude Code sessions elsewhere on the machine stay untouched. The single, narrow
+exception is the `/orchestrate` slash command file (`~/.claude/commands/orchestrate.md`),
+which is inert until you type it: it registers no hook and changes no default session
+behavior. Its rendered copy bakes in this checkout's absolute path, so **re-run
+`./bin/install.sh` if you move the repo** — otherwise `/orchestrate` points at the old
+location until you do. See `design.md` → *Portability & bootstrap* for the full split
+between what's portable (this repo + GitHub) and what's machine-local, and why the
+carve-out is safe.
 
 ### Onboard a project
 
@@ -91,6 +98,22 @@ day. See `design.md` → *Scheduling & power* for the full mechanics (usage-limi
 backoff, `pmset` wake chain, concurrency cap).
 
 ## Usage
+
+### Interactive orchestrator (human-gated)
+
+Turn any interactive `claude` session — in **any** repo — into an orchestrator that
+loads board state and proposes what to dispatch, acting only on your explicit OK:
+
+```bash
+/orchestrate            # whole board: propose worker + checker dispatches, wait for your "go"
+/orchestrate solar-income   # scope the view to one onboarded repo
+```
+
+Rendered into `~/.claude/commands/` by `install.sh` (the one `~/.claude/` carve-out).
+It **proposes, then dispatches workers and checkers only after you confirm** — never
+autonomously, and it never merges. Its tools are scoped to the board digest, the two
+launchers, and read-only `gh`. For a session booted from this checkout with the digest
+pre-injected (same posture), use `./bin/launch-orchestrator.sh` instead.
 
 ### Run one orchestration pass by hand
 
@@ -172,9 +195,11 @@ derailleur/
 ├── briefs/                       Role protocol briefs
 │   ├── worker-brief.md
 │   ├── checker-brief.md
-│   └── orchestrator-brief.md
+│   ├── orchestrator-brief.md            Autonomous (Phase 4) dispatch brain
+│   └── orchestrator-interactive-brief.md  Human-gated brain, shared by launch-orchestrator + /orchestrate
 ├── templates/
 │   ├── project.yml                  Tracked, sanitized manifest shape (new-project.sh renders it)
+│   ├── orchestrate.command.md          /orchestrate source (install renders it to ~/.claude/commands/)
 │   └── pr-results-summary.md        The results-summary PR template workers fill in
 ├── host/hooks/                   PreToolUse / Stop / SessionStart hooks (the safety layer)
 ├── host/LaunchAgents/            launchd plist template for the scheduled loop
