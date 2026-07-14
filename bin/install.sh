@@ -100,8 +100,23 @@ fi
 # no hooks registered, so ordinary interactive sessions elsewhere are untouched.
 CMD_TEMPLATE="$ORCH/templates/orchestrate.command.md"
 CMD_DEST="$HOME/.claude/commands/orchestrate.md"
+cmd_in_repo=""
 if [ -f "$CMD_TEMPLATE" ]; then
   mkdir -p "$(dirname "$CMD_DEST")"
+  # The rendered command bakes in THIS checkout's absolute path — a machine-local
+  # artifact that must never be committed. But ~/.claude/commands is not always a
+  # plain directory: a machine bootstrap may symlink it into a versioned dotfiles
+  # repo, in which case writing here silently drops a machine-specific file into a
+  # shared git tree (it then gets committed and breaks every other machine). Resolve
+  # the target through symlinks (pwd -P is load-bearing — the symlink is what hides
+  # the repo from a naive check) and warn loudly if it lands inside a work tree.
+  real_dest="$(cd "$(dirname "$CMD_DEST")" && pwd -P)"
+  if git -C "$real_dest" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    cmd_in_repo="$(git -C "$real_dest" rev-parse --show-toplevel 2>/dev/null || echo "$real_dest")"
+    warn "render target resolves inside a git repo: $cmd_in_repo"
+    warn "  orchestrate.md is machine-specific (it bakes in $ORCH) and must NOT be committed."
+    warn "  gitignore it there, or point ~/.claude/commands at an unversioned directory."
+  fi
   # Substitute the placeholder and drop the leading source-only HTML comment so
   # the YAML frontmatter is the first line of the rendered command.
   rendered="$(ORCH="$ORCH" CMD_TEMPLATE="$CMD_TEMPLATE" python3 - <<'PY'
@@ -134,3 +149,10 @@ Next, as needed:
 
 See README.md for the full host + per-project checklists.
 EOF
+
+if [ -n "$cmd_in_repo" ]; then
+  warn ""
+  warn "NOTE: ~/.claude/commands/orchestrate.md was written into a git repo ($cmd_in_repo)."
+  warn "      It is machine-specific — gitignore it there or repoint ~/.claude/commands"
+  warn "      before it gets committed. See README → install."
+fi
