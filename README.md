@@ -124,7 +124,8 @@ Tunable by env var, e.g. `WORKER_BUDGET=6 ./bin/orchestrator-cycle.sh`:
 | Var | Default | What it does |
 |---|---|---|
 | `CAP` | `2` | Max workers in flight at once (tied to your review bandwidth, not CPU). |
-| `BUDGET` | `0.50` | Orchestrator session budget (USD). |
+| `BUDGET` | `2.00` | Orchestrator session budget (USD). |
+| `MODEL` | `sonnet` | Orchestrator session model. It only reads the digest and routes, so it's pinned cheap — and pinned at all, so a cycle never inherits whatever expensive model your interactive sessions default to. |
 | `WORKER_BUDGET` | `10.00` | Per-worker session budget (USD). |
 | `CHECKER_BUDGET` | `3.00` | Per-checker session budget (USD). |
 | `CHECKER_LIMIT` | `4` | Max checker rounds per review generation before escalating to `needs-input`. |

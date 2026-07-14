@@ -18,7 +18,10 @@
 #
 # Env:
 #   CAP             worker concurrency cap — max workers in flight at once (default 2)
-#   BUDGET          orchestrator session budget in USD (default 0.50)
+#   BUDGET          orchestrator session budget in USD (default 2.00)
+#   MODEL           orchestrator session model (default sonnet — it reads the digest
+#                   and routes; pinning it keeps the cycle off whatever expensive
+#                   default an interactive session happens to be set to)
 #   WORKER_BUDGET   per-worker session budget in USD (default 10.00)
 #   CHECKER_BUDGET  per-checker session budget in USD (default 3.00)
 #   CHECKER_LIMIT   max checker rounds per PR before escalating to the operator (default 4)
@@ -29,7 +32,8 @@ set -euo pipefail
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ORCH/bin/config-common.sh"   # OPERATOR_NAME, GITHUB_HANDLE (escalation @-mention)
 CAP="${CAP:-2}"
-BUDGET="${BUDGET:-0.50}"
+BUDGET="${BUDGET:-2.00}"
+MODEL="${MODEL:-sonnet}"
 WORKER_BUDGET="${WORKER_BUDGET:-10.00}"
 CHECKER_BUDGET="${CHECKER_BUDGET:-3.00}"
 CHECKER_LIMIT="${CHECKER_LIMIT:-4}"
@@ -188,10 +192,11 @@ BRIEF="$(BRIEF_SLOTS="$SLOTS" BRIEF_SLUGS="$SLUGS" \
 TASK="Run one orchestration cycle. From the injected board digest, dispatch up to $SLOTS worker(s) on well-specified, onboarded issues and handle under-specified ones per your brief. Follow the brief exactly."
 
 # 6. Boot the headless orchestrator (board-only: no Edit/Write; budget-capped) -
-echo "Booting orchestrator (budget \$$BUDGET)…"
+echo "Booting orchestrator (model $MODEL, budget \$$BUDGET)…"
 ORCHESTRATOR=1 claude -p "$TASK" \
   --settings "$SETTINGS_JSON" \
   --append-system-prompt "$BRIEF" \
+  --model "$MODEL" \
   --permission-mode bypassPermissions \
   --disallowedTools Edit Write NotebookEdit \
   --max-budget-usd "$BUDGET" \
@@ -199,5 +204,18 @@ ORCHESTRATOR=1 claude -p "$TASK" \
   | python3 -c 'import sys, json
 d = json.load(sys.stdin)
 print("\n=== orchestrator result ===")
-print(d.get("result", "(no result)"))
+# A killed session (budget cap, rate limit, crash) carries no "result" key — only
+# is_error + errors + terminal_reason. Surface that: a bare "(no result)" reads like
+# "the orchestrator had nothing to dispatch" when it actually never got to decide.
+if d.get("is_error"):
+    print("ORCHESTRATOR DID NOT FINISH — " + str(d.get("subtype") or "error")
+          + " (terminal_reason: " + str(d.get("terminal_reason") or "unknown") + ")")
+    for e in d.get("errors") or ["(no error detail)"]:
+        print("  ! " + str(e))
+    if d.get("result"):
+        print("\npartial result:\n" + str(d["result"]))
+    print("\nNothing was dispatched this cycle. If the budget was exhausted, re-run with"
+          " a higher BUDGET (e.g. BUDGET=4 ./bin/orchestrator-cycle.sh).")
+else:
+    print(d.get("result") or "(no result)")
 print("\ncost: $" + str(round(d.get("total_cost_usd", 0), 4)))'
