@@ -57,6 +57,38 @@ behavior. Its rendered copy bakes in this checkout's absolute path, so **re-run
 location until you do. See `design.md` → *Portability & bootstrap* for the full split
 between what's portable (this repo + GitHub) and what's machine-local.
 
+### Verify / smoke test
+
+`./bin/smoke-test.sh` is a one-command check that the operator-identity bootstrap
+still works. All dispatch flows through a single guard in `bin/config-common.sh`,
+which reads your gitignored `orchestrator.conf` and aborts if it's missing or any of
+the five fields (`OPERATOR_NAME`, `GITHUB_HANDLE`, `PR_OWNER`, `LAUNCHD_LABEL`,
+`BOARD_PROJECT`) is blank. The smoke test exercises that guard end-to-end so a
+regression is caught here, not on a labmate's first real run.
+
+**What it checks** (against throwaway temp confs — it never touches your real one):
+a missing conf aborts; a conf with a blank field aborts *and names the field*; a
+fully-filled conf exits 0, exports all five vars, and renders `{{OPERATOR_NAME}}`
+into a brief the way the launchers do. If a real `orchestrator.conf` is present it
+also confirms *your* conf passes the guard, and — when `gh` is authenticated —
+that `launch-orchestrator.sh --dry-run` renders your board digest. It asserts your
+real conf is byte-identical before and after.
+
+**When to run it:** right after `./bin/install.sh` and filling in
+`orchestrator.conf`, and any time you edit `orchestrator.conf`, the launchers, or
+`bin/config-common.sh`.
+
+**How to run it:**
+
+```bash
+./bin/smoke-test.sh            # prints PASS / SKIP per check; exits 0 if all pass
+```
+
+**How to read a failure:** each check prints a `PASS:` line; steps that need the
+network or `gh` auth print `SKIP:` and never fail the run (it's deterministic and
+passes offline). On the first failed check the script prints a `FAIL:` line saying
+*what failed + what to do*, points back to this section, and exits nonzero.
+
 ### Onboard a project
 
 1. Choose an **archetype**: `git-native` (preferred — repo is git-only, data is a
