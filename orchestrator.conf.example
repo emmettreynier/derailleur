@@ -32,3 +32,19 @@ LAUNCHD_LABEL="com.your-handle.orchestrator"
 # `gh project view N --owner @me`). board-digest.sh reads this board to build the
 # orchestrator's dispatchable view. Find it with `gh project list --owner @me`.
 BOARD_PROJECT="1"
+
+# --- Optional -----------------------------------------------------------------
+
+# Dispatch schedule — the SINGLE source of truth for when the scheduled loop fires.
+# Space-separated 24h HH:MM slots (zero-padded). `schedule.sh install` derives BOTH
+# the launchd fire times (StartCalendarInterval) AND the pmset wake chain from this
+# one value, so changing the cadence is a one-line edit here followed by
+# `./bin/schedule.sh install` — no hand-editing of the plist or the script.
+#
+# Slots are treated as the desired fire CENTERS shifted 15 min early: run-cycle.sh's
+# --jitter then sleeps 0–30 min so each cycle lands within ±15 min of its center
+# (de-syncing from other hosts' on-the-hour cron). SLOTS[0] also seeds the daily
+# pmset repeat-wake. If unset, defaults to the night-heavy schedule below (centers
+# 20/23/02/05/08). For an hourly cadence: "00:00 01:00 02:00 ... 23:00".
+#
+# SCHEDULE_SLOTS="19:45 22:45 01:45 04:45 07:45"

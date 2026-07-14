@@ -64,6 +64,38 @@ work tree — heed it, because a committed `orchestrate.md` carries one machine'
 directory and breaks `/orchestrate` on every other machine that pulls it. Either gitignore
 the file there or repoint `~/.claude/commands` somewhere unversioned.
 
+### Verify / smoke test
+
+`./bin/smoke-test.sh` is a one-command check that the operator-identity bootstrap
+still works. All dispatch flows through a single guard in `bin/config-common.sh`,
+which reads your gitignored `orchestrator.conf` and aborts if it's missing or any of
+the five fields (`OPERATOR_NAME`, `GITHUB_HANDLE`, `PR_OWNER`, `LAUNCHD_LABEL`,
+`BOARD_PROJECT`) is blank. The smoke test exercises that guard end-to-end so a
+regression is caught here, not on a labmate's first real run.
+
+**What it checks** (against throwaway temp confs — it never touches your real one):
+a missing conf aborts; a conf with a blank field aborts *and names the field*; a
+fully-filled conf exits 0, exports all five vars, and renders `{{OPERATOR_NAME}}`
+into a brief the way the launchers do. If a real `orchestrator.conf` is present it
+also confirms *your* conf passes the guard, and — when `gh` is authenticated —
+that `launch-orchestrator.sh --dry-run` renders your board digest. It asserts your
+real conf is byte-identical before and after.
+
+**When to run it:** right after `./bin/install.sh` and filling in
+`orchestrator.conf`, and any time you edit `orchestrator.conf`, the launchers, or
+`bin/config-common.sh`.
+
+**How to run it:**
+
+```bash
+./bin/smoke-test.sh            # prints PASS / SKIP per check; exits 0 if all pass
+```
+
+**How to read a failure:** each check prints a `PASS:` line; steps that need the
+network or `gh` auth print `SKIP:` and never fail the run (it's deterministic and
+passes offline). On the first failed check the script prints a `FAIL:` line saying
+*what failed + what to do*, points back to this section, and exits nonzero.
+
 ### Onboard a project
 
 1. Choose an **archetype**: `git-native` (preferred — repo is git-only, data is a
@@ -96,10 +128,24 @@ timer instead of triggering it by hand:
 ./bin/schedule.sh live          # flip the switch that lets scheduled runs actually spend
 ```
 
-It runs night-heavy (roughly 8pm/11pm/2am/5am/8am on weeknights, jittered) so it
-spends your Claude usage while you're asleep instead of competing with you during the
-day. See `design.md` → *Scheduling & power* for the full mechanics (usage-limit
+By default it runs night-heavy (roughly 8pm/11pm/2am/5am/8am on weeknights, jittered)
+so it spends your Claude usage while you're asleep instead of competing with you during
+the day. See `design.md` → *Scheduling & power* for the full mechanics (usage-limit
 backoff, `pmset` wake chain, concurrency cap).
+
+**Changing the cadence** is a single-line edit. The schedule lives in exactly one
+place — `SCHEDULE_SLOTS` in `orchestrator.conf` (space-separated 24h `HH:MM` slots) —
+and `install` derives both the `launchd` fire times and the `pmset` wake chain from it,
+so the two can never desync:
+
+```bash
+# in orchestrator.conf:  SCHEDULE_SLOTS="00:00 01:00 02:00 ... 23:00"   # e.g. hourly
+./bin/schedule.sh install       # re-render the plist + re-seed the wake chain from it
+./bin/schedule.sh status        # confirm the slots now in effect
+```
+
+Unset, it falls back to the night-heavy default; a malformed slot (not `HH:MM`) fails
+loud at `install` rather than producing a broken plist.
 
 ## Usage
 
