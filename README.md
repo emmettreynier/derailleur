@@ -54,8 +54,11 @@ safety hooks are passed to each dispatch by in-repo path, so your normal interac
 Claude Code sessions elsewhere on the machine stay untouched. The single, narrow
 exception is the `/orchestrate` slash command file (`~/.claude/commands/orchestrate.md`),
 which is inert until you type it: it registers no hook and changes no default session
-behavior. See `design.md` → *Portability & bootstrap* for the full split between what's
-portable (this repo + GitHub) and what's machine-local, and why the carve-out is safe.
+behavior. Its rendered copy bakes in this checkout's absolute path, so **re-run
+`./bin/install.sh` if you move the repo** — otherwise `/orchestrate` points at the old
+location until you do. See `design.md` → *Portability & bootstrap* for the full split
+between what's portable (this repo + GitHub) and what's machine-local, and why the
+carve-out is safe.
 
 ### Onboard a project
 
