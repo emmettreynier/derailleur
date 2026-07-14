@@ -7,17 +7,24 @@
 # What it does, and (deliberately) what it does NOT:
 #   - checks the host deps the loop assumes (gh, jq, claude, python3, git);
 #   - makes the in-repo host hooks + launcher scripts executable;
+#   - renders the one opt-in ~/.claude/ file: the /orchestrate slash command
+#     (see the carve-out note below);
 #   - points you at the two follow-on, opt-in steps it does NOT run for you:
 #       * the scheduled launcher  -> ./schedule.sh install   (registers the
 #         launchd timer + pmset wakes; needs sudo, so it's separate on purpose)
 #       * per-project onboarding  -> ./new-project.sh <owner/repo>
 #
-# It intentionally does NOT symlink anything into ~/.claude/. The orchestrator's
-# host hooks (host/hooks/raw-data-guard.py, worker-stop-guard.sh,
+# The orchestrator's host hooks (host/hooks/raw-data-guard.py, worker-stop-guard.sh,
 # session-start-digest.sh) are wired into each dispatch BY IN-REPO PATH — the
 # launchers pass them via --settings / hook flags (see launch-worker.sh,
 # launch-checker.sh, launch-orchestrator.sh). They are NOT registered in a shared
 # ~/.claude/settings.json, by design, so interactive sessions stay untouched.
+#
+# The SINGLE, narrow carve-out to "writes nothing to ~/.claude/": the /orchestrate
+# slash command, rendered to ~/.claude/commands/orchestrate.md. It is inert until
+# the operator types /orchestrate — no SessionStart/hook registration, so it
+# changes no default session behavior anywhere. Rendered here (not shipped) so
+# this checkout's absolute path is baked in; the write is explicit and logged.
 # Your personal ~/.claude config (CLAUDE.md, settings.json, hooks/, skills/) is a
 # separate concern, owned by your machine bootstrap (e.g. project-management-v2's
 # bootstrap/install.sh), which symlinks it canonical-in-repo -> ~/.claude.
@@ -84,6 +91,34 @@ else
   cp "$ORCH/orchestrator.conf.example" "$ORCH/orchestrator.conf"
   warn "scaffolded orchestrator.conf from the example — EDIT it with your identity"
   warn "  (OPERATOR_NAME / GITHUB_HANDLE / PR_OWNER / LAUNCHD_LABEL / BOARD_PROJECT) before dispatching."
+fi
+
+# --- opt-in /orchestrate slash command (the one ~/.claude/ carve-out) ---------
+# Render templates/orchestrate.command.md -> ~/.claude/commands/orchestrate.md with
+# this checkout's absolute path baked into {{DERAILLEUR_ROOT}}. Idempotent: rewrites
+# only when the rendered content differs, so a re-run is a no-op. Inert until typed;
+# no hooks registered, so ordinary interactive sessions elsewhere are untouched.
+CMD_TEMPLATE="$ORCH/templates/orchestrate.command.md"
+CMD_DEST="$HOME/.claude/commands/orchestrate.md"
+if [ -f "$CMD_TEMPLATE" ]; then
+  mkdir -p "$(dirname "$CMD_DEST")"
+  # Substitute the placeholder and drop the leading source-only HTML comment so
+  # the YAML frontmatter is the first line of the rendered command.
+  rendered="$(ORCH="$ORCH" CMD_TEMPLATE="$CMD_TEMPLATE" python3 - <<'PY'
+import os
+src = open(os.environ["CMD_TEMPLATE"]).read()
+src = src[src.find("---"):]                      # frontmatter onward (drop the comment)
+print(src.replace("{{DERAILLEUR_ROOT}}", os.environ["ORCH"]), end="")
+PY
+)"
+  if [ -f "$CMD_DEST" ] && [ "$(cat "$CMD_DEST")" = "$rendered" ]; then
+    note "✓ ~/.claude/commands/orchestrate.md up to date (no change)"
+  else
+    printf '%s\n' "$rendered" > "$CMD_DEST"
+    note "✓ rendered ~/.claude/commands/orchestrate.md  (DERAILLEUR_ROOT=$ORCH)"
+  fi
+else
+  warn "template missing: $CMD_TEMPLATE — skipped /orchestrate command render"
 fi
 
 # --- next steps (opt-in; this script does not run them) -----------------------

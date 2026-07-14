@@ -31,7 +31,19 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   new-session `setsid` shim for detached dispatch) belongs there, not duplicated.
 - `briefs/*-brief.md` files are the protocol layer, rendered by their launcher with
   `{{TOKEN}}` substitution — edit them for lifecycle/signal changes, keep the
-  tokens intact if you edit the surrounding prose.
+  tokens intact if you edit the surrounding prose. **Exception:**
+  `briefs/orchestrator-interactive-brief.md` is deliberately **token-free** — it's
+  shared verbatim by `launch-orchestrator.sh` and the `/orchestrate` command (which
+  pulls it in via an `@file` reference that does no substitution), so any operator-
+  or path-specific detail must be supplied by the *front* (the launcher appends the
+  checkout path; the command body carries the absolute invocations), never baked
+  into the brief.
+- The `/orchestrate` command source lives in `templates/orchestrate.command.md` with
+  a `{{DERAILLEUR_ROOT}}` placeholder; `install.sh` renders it to
+  `~/.claude/commands/orchestrate.md`, substituting the path and **stripping the
+  leading HTML comment so the YAML frontmatter is the first line** (a command with a
+  comment before its frontmatter won't parse). Keep the repo copy path-free — the
+  only absolute path appears in the install-rendered output, never in the diff.
 - Prefer a script's `--dry-run` flag over editing blind when verifying a change —
   there's no test suite, so `--dry-run` output and `logs/cycle.log` are how you
   check correctness.

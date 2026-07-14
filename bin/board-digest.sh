@@ -11,11 +11,18 @@
 # 1 `gh search issues` (close dates, for the Done cap). Local: reads ledger.md.
 #
 # Env:
-#   DONE_DAYS   how many days back to show closed items (default 7)
+#   DONE_DAYS     how many days back to show closed items (default 7)
+#   DIGEST_SLUG   restrict the digest to a single onboarded repo (same as the
+#                 positional <slug> arg; the arg wins if both are given)
+#
+# Usage:
+#   ./board-digest.sh              # whole board, scoped to all onboarded repos
+#   ./board-digest.sh <slug>       # scoped to one onboarded repo (e.g. solar-income)
 set -euo pipefail
 
 OWNER="@me"
 DONE_DAYS="${DONE_DAYS:-7}"
+SLUG_FILTER="${1:-${DIGEST_SLUG:-}}"   # positional arg beats DIGEST_SLUG; empty = all
 ORCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LEDGER="$ORCH_DIR/ledger.md"
 # Operator identity (PR_OWNER, OPERATOR_NAME, BOARD_PROJECT, …) comes from orchestrator.conf.
@@ -35,6 +42,19 @@ closed_json="$(gh search issues --owner "$PR_OWNER" --state closed \
 # (Open PRs are fetched per onboarded repo inside the script, with PR state.)
 onboarded_slugs="$(ls "$ORCH_DIR/projects/"*.yml 2>/dev/null | xargs -n1 basename 2>/dev/null \
                      | sed 's/\.yml$//' | paste -sd, - || true)"
+
+# Optional single-repo scope (arg or DIGEST_SLUG). Must be an onboarded slug —
+# a manifest at projects/<slug>.yml — else the orchestrator would be pointed at a
+# repo it can't dispatch on. Restrict the onboarded set to just that slug; the
+# rest of the pipeline (dispatch candidates, footer) then narrows automatically.
+if [ -n "$SLUG_FILTER" ]; then
+  if [ ! -f "$ORCH_DIR/projects/$SLUG_FILTER.yml" ]; then
+    echo "board-digest: no onboarded repo '$SLUG_FILTER' (expected projects/$SLUG_FILTER.yml)" >&2
+    echo "              onboarded: ${onboarded_slugs:-none}" >&2
+    exit 1
+  fi
+  onboarded_slugs="$SLUG_FILTER"
+fi
 
 BOARD_JSON="$board_json" CLOSED_JSON="$closed_json" PR_OWNER="$PR_OWNER" \
 OPERATOR_NAME="$OPERATOR_NAME" \
