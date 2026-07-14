@@ -39,9 +39,8 @@ PR, that's always you.
    `/orchestrate` slash command into `~/.claude/commands/` (the one, narrow
    `~/.claude/` carve-out — see below). Idempotent.
 5. Fill in `orchestrator.conf` with your identity (`OPERATOR_NAME`, `GITHUB_HANDLE`,
-   `PR_OWNER`, `LAUNCHD_LABEL`, `BOARD_PROJECT`) — it's gitignored and per-operator, so a
-   labmate runs their own instance without editing code. Every field is required; the
-   scripts abort with guidance if any is blank.
+   `PR_OWNER`, `LAUNCHD_LABEL`, `BOARD_PROJECT`) — it's gitignored and per-operator. Every field is required; the
+   scripts abort with guidance if any is blank. See `orchestrator.conf.example` for more information.
 6. Verify: `claude --version`, then a dry run: `./bin/launch-orchestrator.sh --dry-run`.
 
 This registers **no hooks and no default behavior** in `~/.claude/` — the worker/checker
@@ -52,8 +51,7 @@ which is inert until you type it: it registers no hook and changes no default se
 behavior. Its rendered copy bakes in this checkout's absolute path, so **re-run
 `./bin/install.sh` if you move the repo** — otherwise `/orchestrate` points at the old
 location until you do. See `design.md` → *Portability & bootstrap* for the full split
-between what's portable (this repo + GitHub) and what's machine-local, and why the
-carve-out is safe.
+between what's portable (this repo + GitHub) and what's machine-local.
 
 ### Onboard a project
 
