@@ -42,19 +42,55 @@ PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 UID_NUM="$(id -u)"
 MODE_FILE="$ORCH/state/mode"   # "live" -> dispatch for real; anything else/absent -> plan-only
 
-# Nightly dispatch FIRE times (24h, local). MUST match StartCalendarInterval in the
-# plist — this list drives the pmset wake chain (wake ~ each fire); the plist fires the
-# job. These sit 15 min before the nominal centers 20/23/02/05/08; run-cycle.sh's
-# --jitter then sleeps 0–30 min so each cycle lands within ±15 of its center (de-syncs
-# us from other hosts' on-the-hour cron — no synchronized server stampede).
-SLOTS=(19:45 22:45 01:45 04:45 07:45)
+# Dispatch FIRE times (24h, local) — the SINGLE source of truth for the schedule, read
+# from orchestrator.conf's SCHEDULE_SLOTS. This one list drives BOTH the pmset wake
+# chain (wake ~ each fire) AND the plist's StartCalendarInterval (the actual fire), so
+# the two can never desync. Default: night-heavy, 15 min before centers 20/23/02/05/08;
+# run-cycle.sh's --jitter then sleeps 0–30 min so each cycle lands within ±15 of its
+# center (de-syncs us from other hosts' on-the-hour cron — no synchronized stampede).
+: "${SCHEDULE_SLOTS:=19:45 22:45 01:45 04:45 07:45}"
+# shellcheck disable=SC2206  # intentional word-split into an array of HH:MM slots
+SLOTS=($SCHEDULE_SLOTS)
 
 die() { echo "schedule: $*" >&2; exit 1; }
 
+# Fail loud on a malformed schedule rather than silently rendering a broken plist.
+validate_slots() {
+  [ "${#SLOTS[@]}" -ge 1 ] \
+    || die "SCHEDULE_SLOTS is empty — set at least one 24h HH:MM slot in orchestrator.conf"
+  local s
+  for s in "${SLOTS[@]}"; do
+    [[ "$s" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] \
+      || die "SCHEDULE_SLOTS: '$s' is not a valid zero-padded 24h HH:MM time (e.g. 09:30, 23:45)"
+  done
+}
+validate_slots
+
+# plist_calendar_block — emit one <dict> StartCalendarInterval entry per slot, indented
+# to sit inside the template's <array>. 10#$x forces base-10 so a zero-padded "08"/"09"
+# isn't misread as invalid octal; %d then drops the leading zero for a clean integer.
+plist_calendar_block() {
+  local s h m
+  for s in "${SLOTS[@]}"; do
+    h="${s%%:*}"; m="${s##*:}"
+    printf '    <dict><key>Hour</key><integer>%d</integer><key>Minute</key><integer>%d</integer></dict>\n' \
+      "$((10#$h))" "$((10#$m))"
+  done
+}
+
 # Render the plist template to stdout: stamp in the repo path (@ORCH@), the operator's
-# launchd label (@LABEL@), and HOME (@HOME@) so a labmate's install is fully their own.
+# launchd label (@LABEL@), and HOME (@HOME@) so a labmate's install is fully their own,
+# then expand the @CALENDAR_INTERVAL@ marker into the slot-derived <dict> entries.
 render_plist() {
-  sed -e "s#@ORCH@#$ORCH#g" -e "s#@LABEL@#$LABEL#g" -e "s#@HOME@#$HOME#g" "$PLIST_SRC"
+  # Pass the multi-line block through the environment, not `awk -v`: the macOS (BWK)
+  # awk rejects a -v value that contains newlines ("newline in string"). Export it in a
+  # subshell so it reaches awk (a `VAR=… cmd` prefix binds only the first pipeline stage)
+  # without leaking into the caller.
+  (
+    export CAL_BLOCK; CAL_BLOCK="$(plist_calendar_block)"
+    sed -e "s#@ORCH@#$ORCH#g" -e "s#@LABEL@#$LABEL#g" -e "s#@HOME@#$HOME#g" "$PLIST_SRC" \
+      | awk '/^[[:space:]]*@CALENDAR_INTERVAL@[[:space:]]*$/ { print ENVIRON["CAL_BLOCK"]; next } { print }'
+  )
 }
 
 # next_slot_epoch — soonest upcoming slot strictly after now (today or tomorrow).
@@ -185,7 +221,7 @@ cmd_status() {
       plist_state="STALE — repo path changed since last install; run '$0 install' to re-render"
     fi
   fi
-  echo "  slots: ${SLOTS[*]}   plist: $plist_state"
+  echo "  slots (SCHEDULE_SLOTS): ${SLOTS[*]}   plist: $plist_state"
   echo "== mode =="
   local mode=""; [ -f "$MODE_FILE" ] && mode="$(tr -d '[:space:]' < "$MODE_FILE" 2>/dev/null || true)"
   if [ "$mode" = live ]; then

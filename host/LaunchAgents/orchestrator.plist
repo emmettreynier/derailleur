@@ -8,13 +8,14 @@
   stamped in at install time — re-run './schedule.sh install' after moving the repo, and
   'schedule.sh status' will flag it if you forget).
 
-  - StartCalendarInterval slots MUST match the SLOTS list in schedule.sh (that list
-    drives the pmset wake chain; these entries drive the actual fire). Night-heavy
-    centers 20/23/02/05/08 to shift the grind off the operator's daytime session-limit
-    window — but the entries below fire 15 min EARLY (:45 of the prior hour) and the
+  - StartCalendarInterval is GENERATED, not hand-maintained: schedule.sh's render_plist
+    replaces the @CALENDAR_INTERVAL@ marker below with one <dict> per slot, derived from
+    the single source of truth — SCHEDULE_SLOTS in orchestrator.conf (the same list that
+    drives the pmset wake chain). So the wake and the fire can never desync; change the
+    cadence in one place. Slots fire 15 min EARLY (e.g. :45 of the prior hour) and the
     `--jitter` flag makes run-cycle.sh sleep a random 0–30 min, so each cycle starts
-    uniformly within ±15 min of its center. That de-syncs us from other hosts' on-the
-    -hour cron jobs (avoids a synchronized server stampede).
+    uniformly within ±15 min of its center — de-syncing us from other hosts' on-the-hour
+    cron jobs (avoids a synchronized server stampede).
   - WeekdayInterval matters less here (the slots span midnight), so we DON'T pin a
     Weekday — pmset already gates power-on to weekdays (MTWRF) and run-cycle.sh's
     usage gate skips spent windows. Keep it simple: fire at every slot, every day.
@@ -46,14 +47,11 @@
     <string>@HOME@</string>
   </dict>
 
-  <!-- Centers 20/23/02/05/08, fired 15 min EARLY; --jitter sleeps 0–30 min -> ±15. -->
+  <!-- GENERATED from SCHEDULE_SLOTS by schedule.sh render_plist — do not hand-edit.
+       Each slot fires 15 min EARLY; --jitter then sleeps 0–30 min -> ±15 of center. -->
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>45</integer></dict>
-    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>45</integer></dict>
-    <dict><key>Hour</key><integer>1</integer><key>Minute</key><integer>45</integer></dict>
-    <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>45</integer></dict>
-    <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>45</integer></dict>
+@CALENDAR_INTERVAL@
   </array>
 
   <!-- launchd captures the wrapper's own stdout/stderr; run-cycle.sh also tees the

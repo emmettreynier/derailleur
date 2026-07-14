@@ -89,10 +89,24 @@ timer instead of triggering it by hand:
 ./bin/schedule.sh live          # flip the switch that lets scheduled runs actually spend
 ```
 
-It runs night-heavy (roughly 8pm/11pm/2am/5am/8am on weeknights, jittered) so it
-spends your Claude usage while you're asleep instead of competing with you during the
-day. See `design.md` → *Scheduling & power* for the full mechanics (usage-limit
+By default it runs night-heavy (roughly 8pm/11pm/2am/5am/8am on weeknights, jittered)
+so it spends your Claude usage while you're asleep instead of competing with you during
+the day. See `design.md` → *Scheduling & power* for the full mechanics (usage-limit
 backoff, `pmset` wake chain, concurrency cap).
+
+**Changing the cadence** is a single-line edit. The schedule lives in exactly one
+place — `SCHEDULE_SLOTS` in `orchestrator.conf` (space-separated 24h `HH:MM` slots) —
+and `install` derives both the `launchd` fire times and the `pmset` wake chain from it,
+so the two can never desync:
+
+```bash
+# in orchestrator.conf:  SCHEDULE_SLOTS="00:00 01:00 02:00 ... 23:00"   # e.g. hourly
+./bin/schedule.sh install       # re-render the plist + re-seed the wake chain from it
+./bin/schedule.sh status        # confirm the slots now in effect
+```
+
+Unset, it falls back to the night-heavy default; a malformed slot (not `HH:MM`) fails
+loud at `install` rather than producing a broken plist.
 
 ## Usage
 
