@@ -15,7 +15,9 @@
 #   status      agent loaded? current mode, next wake, usage-reset gate, cycle.log tail.
 #   live        flip mode to LIVE (scheduled cycles dispatch for real / spend).
 #   plan-only   flip mode to PLAN-ONLY (cycles run but spend nothing). [aliases: dry, plan]
-#   pause       stop the timer firing without uninstalling (e.g. while away).
+#   pause       stop the timer firing without uninstalling (e.g. while away). REFUSES
+#               if a worker/checker is still in-flight (bootout would SIGTERM the whole
+#               job tree, reaping them — issue #18); `pause --force` overrides and kills.
 #   resume      start firing again after a pause.
 #   run         fire one cycle right now, inline + immediate (no jitter); RESPECTS mode.
 #   run --dry-run   force a free planning cycle now regardless of mode.
@@ -41,6 +43,7 @@ PLIST_SRC="$ORCH/host/LaunchAgents/orchestrator.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 UID_NUM="$(id -u)"
 MODE_FILE="$ORCH/state/mode"   # "live" -> dispatch for real; anything else/absent -> plan-only
+LEDGER="$ORCH/ledger.md"       # in-flight dispatches (worker/checker) — see live_dispatches
 
 # Dispatch FIRE times (24h, local) — the SINGLE source of truth for the schedule, read
 # from orchestrator.conf's SCHEDULE_SLOTS. This one list drives BOTH the pmset wake
@@ -53,6 +56,29 @@ MODE_FILE="$ORCH/state/mode"   # "live" -> dispatch for real; anything else/abse
 SLOTS=($SCHEDULE_SLOTS)
 
 die() { echo "schedule: $*" >&2; exit 1; }
+
+# live_dispatches — echo the ledger lines for dispatches that are STILL RUNNING (status
+# `dispatched` AND a recorded pid that is still alive). These are the workers/checkers a
+# `launchctl bootout` of this job would SIGTERM: a dispatch the autonomous cycle spawned
+# lives inside this launchd job's process tree, and bootout tears down the whole tree.
+# The per-dispatch os.setsid() isolation (run_in_new_session) shields a worker from a
+# process-GROUP signal when its dispatching session ends, but NOT from launchd killing
+# the job — so pausing mid-flight reaps live work (issue #18). A pid of "-" (foreground /
+# operator-supervised) can't be signal-tested and isn't the reaping concern, so it's
+# skipped. Best-effort and conservative: it may also flag hand-launched detached workers
+# (indistinguishable from the ledger), which is a safe over-warning, not a miss.
+live_dispatches() {
+  [ -f "$LEDGER" ] || return 0
+  local line pid status
+  while IFS= read -r line; do
+    case "$line" in "- #"*|"- check pr#"*) ;; *) continue ;; esac
+    status="$(sed -nE 's/.*status[[:space:]]+([^[:space:]]+).*/\1/p' <<<"$line")"
+    [ "$status" = dispatched ] || continue
+    pid="$(sed -nE 's/.*pid[[:space:]]+([^[:space:]]+).*/\1/p' <<<"$line")"
+    [ -n "$pid" ] && [ "$pid" != "-" ] || continue
+    kill -0 "$pid" 2>/dev/null && printf '%s\n' "$line"
+  done < "$LEDGER"
+}
 
 # Fail loud on a malformed schedule rather than silently rendering a broken plist.
 validate_slots() {
@@ -184,6 +210,24 @@ cmd_plan_only() {
 # instant and sudo-free. The Mac may still wake at slot times and find nothing to run
 # (harmless — it just sleeps again); for a long absence, 'uninstall' also clears those.
 cmd_pause() {
+  local force=0
+  [ "${1:-}" = "--force" ] && force=1
+  # Guard against reaping in-flight work: `launchctl bootout` SIGTERMs this job's whole
+  # process tree, which includes any worker/checker the autonomous cycle dispatched (the
+  # os.setsid() isolation doesn't survive a bootout of the job itself — issue #18). If a
+  # dispatch is still live, refuse the pause unless --force so the operator doesn't
+  # silently kill in-progress work; --force pauses anyway and warns what it's killing.
+  local live; live="$(live_dispatches)"
+  if [ -n "$live" ]; then
+    local n; n="$(printf '%s\n' "$live" | grep -c .)"
+    if [ "$force" = 0 ]; then
+      echo "schedule: refusing to pause — bootout would SIGTERM $n in-flight dispatch(es) in this job:" >&2
+      printf '%s\n' "$live" | sed 's/^/  /' >&2
+      echo "  Wait for them to finish (watch: $0 status), or force the pause (KILLS them + loses in-progress work): $0 pause --force" >&2
+      exit 1
+    fi
+    echo "⚠ --force: pausing with $n live dispatch(es) — bootout will SIGTERM them; any unpushed in-progress work is lost." >&2
+  fi
   launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null \
     && echo "paused — timer unloaded; it won't fire until '$0 resume'. (Symlink + wakes left in place.)" \
     || echo "already paused (timer not loaded)."
@@ -266,8 +310,8 @@ case "${1:-}" in
   run)        shift; cmd_run "$@" ;;
   live)       cmd_live ;;
   plan-only|dry|plan) cmd_plan_only ;;
-  pause)      cmd_pause ;;
+  pause)      shift; cmd_pause "$@" ;;
   resume)     cmd_resume ;;
   arm-wake)   cmd_arm_wake ;;
-  *) echo "usage: $0 {install|uninstall|status|run [--dry-run]|live|plan-only|pause|resume}" >&2; exit 2 ;;
+  *) echo "usage: $0 {install|uninstall|status|run [--dry-run]|live|plan-only|pause [--force]|resume}" >&2; exit 2 ;;
 esac
