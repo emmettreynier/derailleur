@@ -62,6 +62,16 @@ while [ $# -gt 0 ]; do
   esac; shift
 done
 
+# Mechanical plan-only gate: a plan-only orchestrator cycle exports ORCH_PLAN_ONLY=1
+# into the headless orchestrator's environment, which its Bash-tool subprocesses (this
+# script) inherit. In that mode a real dispatch is impossible BY CONSTRUCTION — we force
+# --dry-run no matter what the planning model passed, so "plan-only" can never spend.
+# (issue #18: plan-only used to be advisory to the model only, not a mechanical gate.)
+if [ "${ORCH_PLAN_ONLY:-0}" = 1 ] && [ "$DRY" = 0 ]; then
+  echo "⚠ ORCH_PLAN_ONLY set — forcing --dry-run (a plan-only cycle cannot dispatch for real)." >&2
+  DRY=1
+fi
+
 MANIFEST="$ORCH/projects/$REPO_SLUG.yml"
 [ -f "$MANIFEST" ]   || { echo "no manifest for '$REPO_SLUG': $MANIFEST" >&2; exit 1; }
 [ -x "$HOOK" ]       || { echo "deny-hook missing/not executable: $HOOK" >&2; exit 1; }
