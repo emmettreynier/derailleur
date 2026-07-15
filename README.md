@@ -218,10 +218,11 @@ worktree idempotently and run detached by default:
 ```bash
 ./bin/schedule.sh status        # timer state, current mode, next wake, usage gate, recent log
 ./bin/schedule.sh live          # let scheduled runs dispatch for real (spend)
-./bin/schedule.sh plan-only     # back to no-spend (runs still happen, just plan)
+./bin/schedule.sh plan-only     # back to no-spend (mechanically: cycles cannot dispatch for real)
 ./bin/schedule.sh run           # run one cycle right now (respects the current mode)
 ./bin/schedule.sh run --dry-run # run one cycle right now in plan-only mode (free)
-./bin/schedule.sh pause         # stop firing entirely (e.g. while away) — instant, reversible
+./bin/schedule.sh pause         # stop firing entirely (e.g. while away); refuses if a worker is in-flight
+./bin/schedule.sh pause --force # pause even with live workers (bootout SIGTERMs them — loses their work)
 ./bin/schedule.sh resume        # start firing again after a pause
 ./bin/schedule.sh uninstall     # remove completely (unregister timer, cancel wakes)
 ```

@@ -43,6 +43,18 @@ LEDGER="$ORCH/ledger.md"
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
+# Plan-only is a MECHANICAL gate, not just advice to the planning model. Without
+# this, a --dry-run cycle only *told* the headless orchestrator (booted below with
+# bypassPermissions) to pass --dry-run to launch-worker.sh — nothing stopped it from
+# omitting the flag and dispatching a real, spending worker, which is exactly what
+# happened in issue #18. Exporting ORCH_PLAN_ONLY=1 makes every dispatch launcher
+# (launch-worker.sh / launch-checker.sh) force --dry-run by construction, so a
+# plan-only cycle *cannot* spend regardless of what the model does. The var is
+# inherited by the launcher subprocesses the model runs via its Bash tool (same
+# env-inheritance the ORCHESTRATOR=1 SessionStart gate relies on), and is unset in
+# any direct/interactive dispatch, so it only ever tightens the autonomous cycle.
+[ "$DRY" = 1 ] && export ORCH_PLAN_ONLY=1
+
 command -v claude >/dev/null || { echo "orchestrator-cycle: claude not found" >&2; exit 1; }
 [ -f "$BRIEF_FILE" ] || { echo "orchestrator brief missing: $BRIEF_FILE" >&2; exit 1; }
 

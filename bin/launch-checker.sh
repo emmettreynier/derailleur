@@ -55,6 +55,15 @@ while [ $# -gt 0 ]; do
   esac; shift
 done
 
+# Mechanical plan-only gate (mirrors launch-worker.sh): a plan-only orchestrator cycle
+# exports ORCH_PLAN_ONLY=1, inherited by this script when the cycle (or the headless
+# orchestrator) runs it. Force --dry-run so a plan-only cycle can never dispatch a real,
+# spending checker — the gate is by construction, not advice to a model (issue #18).
+if [ "${ORCH_PLAN_ONLY:-0}" = 1 ] && [ "$DRY" = 0 ]; then
+  echo "⚠ ORCH_PLAN_ONLY set — forcing --dry-run (a plan-only cycle cannot dispatch for real)." >&2
+  DRY=1
+fi
+
 MANIFEST="$ORCH/projects/$REPO_SLUG.yml"
 [ -f "$MANIFEST" ]   || { echo "no manifest for '$REPO_SLUG': $MANIFEST" >&2; exit 1; }
 [ -x "$HOOK" ]       || { echo "deny-hook missing/not executable: $HOOK" >&2; exit 1; }
