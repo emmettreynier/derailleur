@@ -58,6 +58,35 @@ session context (the launcher's boot line or the /orchestrate command body):
     launch-worker.sh  <slug> <issue#> [--dry-run] [--budget USD]   # land an issue
     launch-checker.sh <slug> <pr#>    [--dry-run] [--budget USD]   # review a ready PR
 
+## Coordinating with the autonomous scheduler
+
+Derailleur can ALSO dispatch on its own, on a launchd timer — the autonomous
+cycle managed by `bin/schedule.sh`. If that scheduler is live while you drive
+here, two orchestrators share one board, ledger, and set of worktrees and WILL
+compete: the autonomous cycle can dispatch a worker onto an issue you are already
+handling, colliding in the same worktree (e.g. two runs racing on the same output
+files). So at the START of an interactive session, surface this to the operator:
+
+- **Pause the autonomous scheduler before driving interactively**, and resume it
+  when handing back. The lever is `bin/schedule.sh pause` (resume with
+  `bin/schedule.sh resume`); confirm it took with `bin/schedule.sh status`. Read
+  that script's own command list if you are unsure which subcommand to use.
+- **`plan-only` is NOT a pause.** It is a spend mode, not a scheduler-off switch;
+  do not rely on it to stop the autonomous cycle from touching the board. The
+  correct lever is `pause`.
+- **Pausing mid-flight can reap in-flight autonomous-dispatched workers.** `pause`
+  tears down the launchd job, which SIGTERMs any worker/checker that job spawned
+  (per-worker session isolation does not survive a teardown of the job itself). It
+  now refuses while a dispatch is still live (override with `pause --force`, which
+  kills them and loses in-progress work) — so the safe path is to let live workers
+  drain first, then pause, or accept the loss deliberately with `--force`.
+- **Resume is the operator's call, not automatic.** There is deliberately no
+  auto-resume hook — unconditional auto-resume would re-enable dispatch when the
+  pause was intentional (a long absence), when workers are still mid-flight, or
+  when another interactive session is still driving. Treat resuming as part of
+  wrap-up: before ending the session, remind the operator to `bin/schedule.sh
+  resume` if they paused the scheduler for you.
+
 ## Posture
 
 Propose, then dispatch on explicit confirmation — never autonomously. Tell the
@@ -66,3 +95,9 @@ dispatch a checker on, with a one-line reason each, and what needs their input.
 Then wait for a clear "go" before running any launch command. A single "go" for
 a specific proposed batch authorizes exactly that batch — re-propose for anything
 new.
+
+Before flipping an unfamiliar control (a scheduler command you haven't used, any
+lever on the dispatch system), read its command list / `--help` first rather than
+guessing what it does — a mode named "plan-only" may not mean what it sounds like.
+After any change to the dispatch system, re-check its `status` to confirm the
+change actually took effect.
