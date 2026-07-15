@@ -23,6 +23,41 @@ The work
   comments. Do what's needed — first implementation or requested changes.
 - Stay scoped to the issue; don't expand it.
 
+Long-running work — survive worker death, never collide with another worker
+For any command likely to outlive you (rule of thumb: more than a few minutes — any full
+estimation/simulation run), do NOT run it inline. You can be killed mid-run at any moment
+(budget cap, rate limit), which would take the child process down with it and lose all
+in-flight compute. Run it detached in a canonically-named tmux session instead:
+- **Canonical name = a pure function of the task.** Build the session name from BOTH repo
+  and issue so it's globally unique per task and identical for every worker on it:
+  `derail-<repo-slug>-{{ISSUE}}`, where `<repo-slug>` is `{{REPO}}` with `/` replaced by
+  `-` (e.g. `owner/repo` #{{ISSUE}} → `derail-owner-repo-{{ISSUE}}`). No timestamps, PIDs,
+  or randomness — every worker must compute the same name.
+- **Atomic create IS the mutex.** Launch with a single command:
+  `tmux new-session -d -s <name> '<cmd> 2>&1 | tee <logpath>'`. If it FAILS because the
+  name already exists, that means another worker (or a past you) already started this run —
+  do NOT create a second session under any other name; fall through to reconcile. Rely on
+  this create-or-fail, not a separate `tmux has-session -t <name>` probe, to prevent two
+  colliding runs (a probe-then-create has a race; create-or-fail does not).
+- **Reconcile before relaunching.** On finding an existing session, classify it before
+  acting — `tmux has-session -t <name>` to confirm it's live, `tmux list-sessions` to
+  enumerate, tail `<logpath>`, and check whether the expected results already exist under
+  {{OUTPUT_PATHS}}:
+  - Still progressing (log advancing, no outputs yet) → wait/monitor, do NOT relaunch.
+  - Finished, outputs present under {{OUTPUT_PATHS}} → use them, then clean up (below).
+  - Wedged (log stalled) or running stale code a newer commit supersedes → kill and relaunch.
+- **Kill/cleanup is explicit.** Tear a session down with `tmux kill-session -t <name>`, and
+  only when the job is confirmed done with outputs written, or confirmed wedged/stale —
+  never speculatively. After killing, update the session comment so the record stays truthful.
+- **The comment is the sole durable record.** Post ONE issue/PR comment when you create the
+  session, naming: the session name, the exact command, and the durable (non-worktree) log
+  path. Update that same comment on finish or kill. The name is recomputable from repo+issue
+  and MUST NOT be mirrored into any local state file — GitHub is the only source of truth;
+  `tmux ls` is the runtime truth for liveness and the log file for progress.
+- **Durable outputs and logs.** Write both the results AND the tee'd `<logpath>` to a
+  durable path under {{OUTPUT_PATHS}}, never inside this worktree — worktrees get pruned,
+  and a log inside one vanishes with it.
+
 Leave a trail — this is the ONLY record of your work, and how it is tracked
 - Open a draft PR early; keep its description current as a running summary.
 - Commit as you go with brief but descriptive messages — the history should read as
