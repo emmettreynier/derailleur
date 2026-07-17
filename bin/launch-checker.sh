@@ -173,7 +173,13 @@ fi
 
 # Data bootstrap: provide the read-only raw symlink + writable results dir so the
 # checker can re-run scripts that read raw and produce outputs to compare.
-if [ -n "$RAW_RESOLVED" ]; then
+# CODE-ONLY EXCEPTION (see launch-worker.sh for the full rationale): a code-only
+# manifest points raw_resolved at the repo root itself, so scaffolding a
+# self-referential data/raw symlink is spurious untracked cruft — skip it when
+# raw_resolved resolves to the same real path as working_clone.
+RAW_REAL="$(cd "$RAW_RESOLVED" 2>/dev/null && pwd -P || echo "")"
+CLONE_REAL="$(cd "$WORKING_CLONE" 2>/dev/null && pwd -P || echo "")"
+if [ -n "$RAW_RESOLVED" ] && [ "$RAW_REAL" != "$CLONE_REAL" ]; then
   mkdir -p "$WORKTREE/data/results"
   ln -sfn "$RAW_RESOLVED" "$WORKTREE/data/raw"
 fi
