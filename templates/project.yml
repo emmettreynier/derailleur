@@ -40,8 +40,16 @@ worktrees_dir: {{WORKTREES_DIR}}
 #   data/results -> writable worker output
 # raw_resolved keys the deny-hook, so raw protection holds regardless of how data/ is
 # provided on a given machine.
+#
+# CODE-ONLY REPO (no research-data tree — e.g. a tooling repo, or derailleur
+# self-hosted): there is no raw tree to point at. Set BOTH data_root and raw_resolved
+# to the repo root itself (the same path as working_clone). That (1) hands the launcher
+# a valid, non-empty --add-dir + makes the deny-hook write-protect the whole live clone,
+# and (2) is the signal the launcher keys on to SKIP the default data/raw+data/results
+# scaffold — without it, a code repo gets a spurious self-referential data/ dir (see
+# projects/derailleur.yml for a worked example). Leave raw_paths/output_paths empty.
 data_root: {{DATA_ROOT}}
-raw_resolved: TODO              # absolute path data/raw points at (the read-only raw tree)
+raw_resolved: TODO              # raw tree data/raw points at; for a code-only repo, = working_clone (see above)
 dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "available offline"
 
 # ── Confidentiality (READ before a live dispatch on a repo with confidential data) ──

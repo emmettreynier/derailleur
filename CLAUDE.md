@@ -26,6 +26,11 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   under `set -u` (e.g. `"${flag[@]}"` with no `--force`) is a fatal `unbound
   variable` error — branch on the flag instead of building-then-expanding an
   optional-arg array (see `bin/worktree-prune.sh` history for the bug this caused).
+- Same `set -e` family: a shell function must not **end** on a bare short-circuit
+  (`[ cond ] && x=1`) — when the test is false the function returns nonzero, and a
+  caller that invokes it bare (not in an `if`/`&&`) aborts the whole script with no
+  output. End such helpers with an explicit `return 0` (this silently killed
+  `worktree-prune.sh --auto`, issue #23).
 - `bin/dispatch-common.sh` is sourced, not executed, by both launchers — shared
   post-run logic (interruption classification, pushing stranded commits, the
   new-session `setsid` shim for detached dispatch) belongs there, not duplicated.

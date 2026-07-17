@@ -197,11 +197,20 @@ fi
 #       exist; point it at the same tree as raw_resolved (its parent dir is the
 #       DROPBOX_PROJ root the script expects). The deny-hook still governs writes.
 #   (b) default template — one read-only data/raw symlink + a writable results dir.
+# CODE-ONLY EXCEPTION: a self-hosting/code-only manifest points raw_resolved at the
+# repo root itself (see projects/derailleur.yml) purely to hand the launcher a valid
+# --add-dir + blanket write-protection — there is NO distinct data tree. Detect that
+# by resolving both to real paths: when raw_resolved == working_clone, scaffolding a
+# self-referential `data/raw -> <repo>` symlink + empty data/results is spurious cruft
+# that (a) shouldn't exist on a code repo and (b) is untracked, so it blocks
+# worktree-prune --auto on merged worktrees. Skip it entirely in that case.
+RAW_REAL="$(cd "$RAW_RESOLVED" 2>/dev/null && pwd -P || echo "")"
+CLONE_REAL="$(cd "$WORKING_CLONE" 2>/dev/null && pwd -P || echo "")"
 if [ -x "$WORKTREE/setup-symlinks.sh" ]; then
   ( cd "$WORKTREE" \
     && DROPBOX_PROJ="${RAW_RESOLVED:+$(dirname "$RAW_RESOLVED")}" ./setup-symlinks.sh ) \
     || echo "⚠ setup-symlinks.sh failed — worktree may be missing data symlinks" >&2
-elif [ -n "$RAW_RESOLVED" ]; then
+elif [ -n "$RAW_RESOLVED" ] && [ "$RAW_REAL" != "$CLONE_REAL" ]; then
   mkdir -p "$WORKTREE/data/results"
   ln -sfn "$RAW_RESOLVED" "$WORKTREE/data/raw"
 fi
