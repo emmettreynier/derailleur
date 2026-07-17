@@ -104,7 +104,10 @@ passes offline). On the first failed check the script prints a `FAIL:` line sayi
    creates the label set, ensures an out-of-Dropbox working clone + worktrees dir,
    and scaffolds `projects/<repo>.yml`. Idempotent.
 3. Fill the scaffolded manifest's TODOs — board `project`, `raw_resolved`, and
-   confirm `data_root`/paths.
+   confirm `data_root`/paths. **Code-only repo (no data tree)?** Point both
+   `data_root` and `raw_resolved` at the repo root itself (same as `working_clone`)
+   and leave `raw_paths`/`output_paths` empty — the launcher then skips the `data/`
+   scaffold (see `templates/project.yml` for why).
 4. Add the repo to the board + the "Needs Me" view (manual, GitHub Projects UI).
 5. **`dropbox-native` only:** pin the raw data "Available offline" in Dropbox
    (manual).
