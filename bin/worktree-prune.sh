@@ -101,6 +101,10 @@ compute_status() {
   else
     ST_REASON="issue ${ST_ISTATE:-?} — work in progress"
   fi
+  # Never leak the exit status of the trailing `[ "$FORCE" = 1 ] && ...` short-circuit:
+  # in the merged+untracked+no-force case it evaluates false, which under `set -e`
+  # would abort the whole run when this function is called bare from a *_cb.
+  return 0
 }
 
 # each_worktree <callback> — iterate every issue-N worktree across onboarded
