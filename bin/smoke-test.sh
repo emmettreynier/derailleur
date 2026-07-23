@@ -10,10 +10,11 @@
 # filled) and only surfaces as a confusing day-one failure for someone else.
 #
 # This script verifies the guard's three states against THROWAWAY temp confs,
-# proves a filled config renders into a brief, and checks the derailleur/dr CLI
+# proves a filled config renders into a brief, checks the derailleur/dr CLI
 # dispatcher routes correctly (including through a symlink, the way install.sh links
-# it onto PATH) — all deterministically and offline. Any step that needs the network
-# / `gh` auth prints a `SKIP:` line instead of failing.
+# it onto PATH), and unit-tests watch-dispatch.sh's terminal-state classification
+# against a throwaway ledger/verdict fixture — all deterministically and offline.
+# Any step that needs the network / `gh` auth prints a `SKIP:` line instead of failing.
 #
 # It NEVER creates, fills, or touches a real orchestrator.conf: every conf it reads
 # lives in a mktemp dir that is removed on exit, and it asserts a pre-existing real
@@ -199,6 +200,61 @@ sym_cmds="$(cd "$TMPROOT" && ./dr help 2>/dev/null | grep -E '^  [a-z][a-z-]*$' 
   "command list differs between direct and symlinked invocation (resolution mismatch)." \
   "The dispatcher must behave identically via the ~/.local/bin symlink and a direct call."
 pass "dispatcher: resolves this repo's bin/ through a symlink from a foreign cwd (identical command list)"
+
+# --- (e) watch-dispatch.sh terminal-state detection ---------------------------
+# watch-dispatch.sh is pure, deterministic, offline local-signal logic — the ideal
+# unit test. Copy the real script into a throwaway ORCH (its own bin/ + ledger.md +
+# logs/) so its `cd dirname/..` resolution lands in the sandbox, seed ledger/verdict
+# fixtures covering every branch, and assert `--dry-run`'s one-shot classification.
+# No loop, no sleep, no network — nothing dispatched, nothing spent.
+WATCH="$ORCH/bin/watch-dispatch.sh"
+[ -x "$WATCH" ] || fail \
+  "bin/watch-dispatch.sh is missing or not executable." \
+  "install.sh's bin/*.sh chmod covers it; confirm the file exists and re-run ./bin/install.sh."
+
+WROOT="$TMPROOT/watch"; mkdir -p "$WROOT/bin" "$WROOT/logs"
+cp "$WATCH" "$WROOT/bin/watch-dispatch.sh"
+# Fixtures ($$ = this live shell): a done worker (status flip); a checker still
+# 'dispatched' but WITH a written verdict (verdict must win over status); a worker
+# whose pid is dead while status never finalized (=> unknown, the silence-is-not-
+# success guard); and a genuinely live dispatched worker (=> pending, must NOT be
+# called terminal).
+cat >"$WROOT/ledger.md" <<LEDGER
+- #10 | owner/demo | issue-10 | $WROOT/logs/demo-issue-10.log | pid 1 | dispatched 2026-01-01T00:00:00Z | status done
+- check pr#20 | owner/demo | issue-10 | $WROOT/logs/demo-pr-20.log | pid $$ | dispatched 2026-01-01T00:00:00Z | status dispatched
+- #30 | owner/demo | issue-30 | $WROOT/logs/demo-issue-30.log | pid 99999999 | dispatched 2026-01-01T00:00:00Z | status dispatched
+- #40 | owner/demo | issue-40 | $WROOT/logs/demo-issue-40.log | pid $$ | dispatched 2026-01-01T00:00:00Z | status dispatched
+LEDGER
+printf '{"verdict":"checked-pass"}\n' >"$WROOT/logs/demo-pr-20-verdict.json"
+
+rc=0
+wd_out="$("$WROOT/bin/watch-dispatch.sh" --dry-run demo#10 demo#pr20 demo#30 demo#40 2>&1)" || rc=$?
+[ "$rc" -eq 0 ] || fail \
+  "watch-dispatch.sh --dry-run exited nonzero ($rc) on a valid fixture: $(printf '%s' "$wd_out" | tail -1)" \
+  "The script should classify each item and exit 0 in --dry-run; see bin/watch-dispatch.sh."
+printf '%s\n' "$wd_out" | grep -qE 'demo#10 \(worker\) -> done' || fail \
+  "watch-dispatch did not classify a status=done worker as 'done'." \
+  "Ledger status-flip detection is broken in bin/watch-dispatch.sh."
+printf '%s\n' "$wd_out" | grep -qE 'demo#pr20 \(checker\) -> checked-pass' || fail \
+  "watch-dispatch did not read the checker verdict JSON (expected 'checked-pass')." \
+  "Verdict-file detection (jq .verdict) is broken, or it lost to the still-dispatched status."
+printf '%s\n' "$wd_out" | grep -qE 'demo#30 \(worker\) -> unknown' || fail \
+  "watch-dispatch did not report a dead-but-unfinalized pid as 'unknown'." \
+  "The silence-is-not-success guard (pid liveness) is broken in bin/watch-dispatch.sh."
+printf '%s\n' "$wd_out" | grep -qE 'demo#40 \(worker\) -> pending' || fail \
+  "watch-dispatch flagged a live, still-dispatched worker as terminal (expected 'pending')." \
+  "A running dispatch must NOT be classified terminal — check the status/pid logic."
+pass "watch-dispatch: done / verdict-wins / dead-pid=unknown / live=pending all classify correctly"
+
+rc=0; "$WROOT/bin/watch-dispatch.sh" --dry-run bogusitem >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 2 ] || fail \
+  "watch-dispatch accepted a malformed item token (expected exit 2, got $rc)." \
+  "Item parsing must reject anything not <slug>#<issue> / <slug>#pr<n>."
+rc=0; "$WROOT/bin/watch-dispatch.sh" >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 2 ] || fail \
+  "watch-dispatch with no items did not exit 2 (got $rc)." \
+  "The script must require at least one item to watch."
+pass "watch-dispatch: malformed item + no-args each exit 2"
 
 # --- real conf, if present: validate the operator's ACTUAL identity (offline) --
 # Deterministic and read-only — sourcing only reads the file. This is what proves

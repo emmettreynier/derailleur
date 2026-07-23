@@ -80,7 +80,11 @@ fully-filled conf exits 0, exports all five vars, and renders `{{OPERATOR_NAME}}
 into a brief the way the launchers do. It also exercises the `derailleur`/`dr` CLI
 dispatcher — `help`/unknown-command/sourced-lib routing, and (the subtle part)
 that it resolves back to this checkout when invoked through a symlink, the way
-`install.sh` links it onto PATH. If a real `orchestrator.conf` is present it
+`install.sh` links it onto PATH. It then unit-tests `watch-dispatch.sh` against a
+throwaway ledger/verdict fixture — that a `done` worker, a written checker verdict
+(which wins over a still-`dispatched` status), a dead-but-unfinalized pid
+(`unknown`), and a genuinely live dispatch (not terminal) each classify correctly,
+and that malformed / missing item args exit 2. If a real `orchestrator.conf` is present it
 also confirms *your* conf passes the guard, and — when `gh` is authenticated —
 that `launch-orchestrator.sh --dry-run` renders your board digest. It asserts your
 real conf is byte-identical before and after.
