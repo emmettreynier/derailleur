@@ -78,6 +78,7 @@ REPO="$(yml repo)"
 WORKING_CLONE="$(expand "$(yml working_clone)")"
 WORKTREES_DIR="$(expand "$(yml worktrees_dir)")"
 RAW_RESOLVED="$(expand "$(yml raw_resolved)")"
+DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 
 # --- resolve the PR: branch, the issue it closes, and ready/draft state -------
 PR_JSON="$(gh pr view "$PR" -R "$REPO" --json isDraft,headRefName,closingIssuesReferences,state 2>/dev/null)" \
@@ -171,18 +172,13 @@ if [ ! -d "$WORKTREE" ]; then
   fi
 fi
 
-# Data bootstrap: provide the read-only raw symlink + writable results dir so the
-# checker can re-run scripts that read raw and produce outputs to compare.
-# CODE-ONLY EXCEPTION (see launch-worker.sh for the full rationale): a code-only
-# manifest points raw_resolved at the repo root itself, so scaffolding a
-# self-referential data/raw symlink is spurious untracked cruft — skip it when
-# raw_resolved resolves to the same real path as working_clone.
-RAW_REAL="$(cd "$RAW_RESOLVED" 2>/dev/null && pwd -P || echo "")"
-CLONE_REAL="$(cd "$WORKING_CLONE" 2>/dev/null && pwd -P || echo "")"
-if [ -n "$RAW_RESOLVED" ] && [ "$RAW_REAL" != "$CLONE_REAL" ]; then
-  mkdir -p "$WORKTREE/data/results"
-  ln -sfn "$RAW_RESOLVED" "$WORKTREE/data/raw"
-fi
+# Data bootstrap: identical to the worker's (bootstrap_worktree_data, dispatch-common.sh)
+# so the checker's worktree gets the SAME links the worker had — critical because the
+# checker re-runs pipeline stages that read raw/+derived/ and write output/. Previously
+# the checker only ever created a single `data/raw -> raw_resolved` symlink and never ran
+# a repo's own setup-symlinks.sh, so for a multi-tree repo (california-pesticides) it
+# pointed data/raw at the whole data dir and left derived/ absent (issue #25).
+bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG"
 
 # Belt-and-suspenders mutation baseline: capture the worktree's tracked-file state
 # before the checker runs; we re-check after, so an accidental write surfaces here
