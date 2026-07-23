@@ -177,10 +177,10 @@ cat <<EOF
 orchestrator host bootstrap complete.
 
 Next, as needed:
-  1. Onboard a project:        ./bin/new-project.sh <owner/repo>
-  2. Install the night timer:  ./bin/schedule.sh install   (ships PLAN-ONLY)
-                               then ./bin/schedule.sh live  when ready to spend
-  3. Sanity check:             ./bin/board-digest.sh   (reads the board)
+  1. Onboard a project:        dr new-project <owner/repo>
+  2. Install the night timer:  dr schedule install   (ships PLAN-ONLY)
+                               then dr schedule live  when ready to spend
+  3. Sanity check:             dr board-digest   (reads the board)
 
 See README.md for the full host + per-project checklists.
 EOF

@@ -40,11 +40,16 @@ PY
 # The interactive role text lives in ONE place — briefs/orchestrator-interactive-brief.md,
 # shared verbatim with the /orchestrate slash command (no second copy). It's
 # token-free; we append this checkout's absolute path so the launchers referenced
-# in the brief resolve regardless of the session's working directory.
+# in the brief resolve regardless of the session's working directory. We lead with
+# the `dr` shorthand (matching the now-`dr`-leading brief) but keep the absolute
+# $ORCH/bin paths as the guaranteed fallback — `dr` needs ~/.local/bin on PATH,
+# the absolute paths always resolve.
 BRIEF="$(cat "$BRIEF_FILE")
 Your derailleur checkout is at: $ORCH
-Dispatch with the absolute paths $ORCH/bin/launch-worker.sh and
-$ORCH/bin/launch-checker.sh (both work from any directory)."
+Dispatch with dr launch-worker and dr launch-checker (both work from any
+directory when ~/.local/bin is on PATH); the absolute paths
+$ORCH/bin/launch-worker.sh and $ORCH/bin/launch-checker.sh are the
+equivalent fallback and always work regardless of PATH."
 
 if [ "$DRY_RUN" = "1" ]; then
   echo "=== board digest (preview) ============================================"

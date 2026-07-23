@@ -272,7 +272,7 @@ if d.get("is_error"):
     if d.get("result"):
         print("\npartial result:\n" + str(d["result"]))
     print("\nNothing was dispatched this cycle. If the budget was exhausted, re-run with"
-          " a higher BUDGET (e.g. BUDGET=4 ./bin/orchestrator-cycle.sh).")
+          " a higher BUDGET (e.g. BUDGET=4 dr orchestrator-cycle).")
 else:
     print(d.get("result") or "(no result)")
 print("\ncost: $" + str(round(d.get("total_cost_usd", 0), 4)))'

@@ -52,15 +52,16 @@ Two scripts in derailleur's bin/ are the sanctioned entry points — worktree,
 safety hooks, and budget are wired in by construction. They take a repo SLUG
 (the repo's short name, e.g. solar-income), resolve the manifest, and are
 independent of your current directory, so they work from any repo. Preview first
-with --dry-run when useful. Invoke them by the absolute path given in your
-session context (the launcher's boot line or the /orchestrate command body):
+with --dry-run when useful. Invoke them via the `dr` CLI (on your PATH, so it
+works from any directory); an absolute `.../bin/launch-*.sh` path from your
+session context works identically:
 
-    launch-worker.sh  <slug> <issue#> [--dry-run] [--budget USD]   # land an issue
-    launch-checker.sh <slug> <pr#>    [--dry-run] [--budget USD]   # review a ready PR
+    dr launch-worker  <slug> <issue#> [--dry-run] [--budget USD]   # land an issue
+    dr launch-checker <slug> <pr#>    [--dry-run] [--budget USD]   # review a ready PR
 
 ## After you dispatch: watch to terminal state (do this automatically)
 
-The instant you run a real `launch-worker.sh` / `launch-checker.sh` (not
+The instant you run a real `dr launch-worker` / `dr launch-checker` (not
 `--dry-run`) this session, begin watching that dispatch to its terminal state —
 **automatically, with no "watch them" prompt from the operator**. Watch exactly
 the item(s) you dispatched this session, and keep watching until **every** one is
@@ -91,7 +92,7 @@ in silence** — that guarantee is in the script, not something you must remembe
 persistent `Monitor` so its per-item lines stream to you as notifications while you
 **stay responsive to the operator**:
 
-    Monitor: <your derailleur checkout>/bin/watch-dispatch.sh derailleur#26 derailleur#pr30
+    Monitor: dr watch-dispatch derailleur#26 derailleur#pr30
 
 Set `persistent: true` (a worker can outlast the default timeout); the script polls
 about every 15s (tune with `--interval N`) and exits itself once all items are
@@ -123,8 +124,8 @@ handling, colliding in the same worktree (e.g. two runs racing on the same outpu
 files). So at the START of an interactive session, surface this to the operator:
 
 - **Pause the autonomous scheduler before driving interactively**, and resume it
-  when handing back. The lever is `bin/schedule.sh pause` (resume with
-  `bin/schedule.sh resume`); confirm it took with `bin/schedule.sh status`. Read
+  when handing back. The lever is `dr schedule pause` (resume with
+  `dr schedule resume`); confirm it took with `dr schedule status`. Read
   that script's own command list if you are unsure which subcommand to use.
 - **`plan-only` is NOT a pause.** It is a spend mode, not a scheduler-off switch;
   do not rely on it to stop the autonomous cycle from touching the board. The
@@ -139,7 +140,7 @@ files). So at the START of an interactive session, surface this to the operator:
   auto-resume hook — unconditional auto-resume would re-enable dispatch when the
   pause was intentional (a long absence), when workers are still mid-flight, or
   when another interactive session is still driving. Treat resuming as part of
-  wrap-up: before ending the session, remind the operator to `bin/schedule.sh
+  wrap-up: before ending the session, remind the operator to `dr schedule
   resume` if they paused the scheduler for you.
 
 ## Posture
