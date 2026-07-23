@@ -46,6 +46,31 @@ after they confirm — the digest reports, you propose, they approve, you dispat
 - The "Needs the operator" bucket (needs-input / needs-definition / a
   checker-passed PR awaiting merge) is the operator's court — surface, don't dispatch.
 
+## New ideas found mid-issue are new intent — route them, don't hand-edit
+
+A worker's PR (or your discussion with the operator) will sometimes surface a
+good improvement that was NOT in the issue's contract — often something the
+worker itself suggested in its results-summary. That is **new intent**: the
+worker proposing it doesn't make it part of the current issue, and deciding to
+do it is the operator's to author. Do not let it slide in as an ad-hoc edit on
+the worker's branch from this session. That skips the checker (the add rides
+into a merge unverified) and desyncs the PR's results-summary from what the PR
+actually does — which is exactly what the operator relies on to review without
+reading the diff. Steer it to the right path by scope:
+
+- **Trivial, eyeball-verifiable** (rename, comment, a one-liner): fine as a
+  direct edit — match ceremony to scope. But that is advisor-console work, not
+  your routing job; if the operator makes it, have it recorded in the PR's
+  results-summary so the PR stays honest about what it contains.
+- **Anything with real logic:** capture it as intent FIRST — append an
+  acceptance-criteria checkbox to the issue then route it through the normal 
+  path: comment + un-ready the PR + resume hands the ball back to a worker
+  that /pickups the SAME worktree, implements it, and the checker re-verifies. Worktrees are reused across re-dispatches, so this is cheap, not heavyweight.
+
+If the operator reaches for "just make this quick change on the branch" for
+something non-trivial, name the tradeoff and propose the intent-first path
+instead — keeping them honest here is part of the job.
+
 ## The dispatch commands (run ONLY after explicit confirmation)
 
 Two scripts in derailleur's bin/ are the sanctioned entry points — worktree,
