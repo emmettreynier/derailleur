@@ -80,7 +80,11 @@ fully-filled conf exits 0, exports all five vars, and renders `{{OPERATOR_NAME}}
 into a brief the way the launchers do. It also exercises the `derailleur`/`dr` CLI
 dispatcher — `help`/unknown-command/sourced-lib routing, and (the subtle part)
 that it resolves back to this checkout when invoked through a symlink, the way
-`install.sh` links it onto PATH. If a real `orchestrator.conf` is present it
+`install.sh` links it onto PATH. It then unit-tests `watch-dispatch.sh` against a
+throwaway ledger/verdict fixture — that a `done` worker, a written checker verdict
+(which wins over a still-`dispatched` status), a dead-but-unfinalized pid
+(`unknown`), and a genuinely live dispatch (not terminal) each classify correctly,
+and that malformed / missing item args exit 2. If a real `orchestrator.conf` is present it
 also confirms *your* conf passes the guard, and — when `gh` is authenticated —
 that `launch-orchestrator.sh --dry-run` renders your board digest. It asserts your
 real conf is byte-identical before and after.
@@ -189,8 +193,10 @@ loads board state and proposes what to dispatch, acting only on your explicit OK
 Rendered into `~/.claude/commands/` by `install.sh` (the one `~/.claude/` carve-out).
 It **proposes, then dispatches workers and checkers only after you confirm** — never
 autonomously, and it never merges. Its tools are scoped to the board digest, the two
-launchers, and read-only `gh`. For a session booted from this checkout with the digest
-pre-injected (same posture), use `./bin/launch-orchestrator.sh` instead.
+launchers, read-only `gh`, and the `Monitor` tool (so it can watch the workers/checkers
+it dispatched to completion without blocking your session). For a session booted from
+this checkout with the digest pre-injected (same posture), use
+`./bin/launch-orchestrator.sh` instead.
 
 ### Run one orchestration pass by hand
 
@@ -297,7 +303,8 @@ derailleur/
 │   ├── config-common.sh           Loads operator identity from orchestrator.conf (sourced)
 │   ├── ledger-prune.sh            Drop stale ledger entries at the start of every cycle
 │   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees
-│   └── board-digest.sh            Deterministic board-state report (no LLM)
+│   ├── board-digest.sh            Deterministic board-state report (no LLM)
+│   └── watch-dispatch.sh          Watch dispatched worker(s)/checker(s) to terminal state (local signals; no LLM)
 ├── ledger.md, logs/, state/      Machine-local runtime state (gitignored)
 └── diagrams/                     Supporting diagrams
 ```

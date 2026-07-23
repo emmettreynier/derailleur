@@ -58,6 +58,61 @@ session context (the launcher's boot line or the /orchestrate command body):
     launch-worker.sh  <slug> <issue#> [--dry-run] [--budget USD]   # land an issue
     launch-checker.sh <slug> <pr#>    [--dry-run] [--budget USD]   # review a ready PR
 
+## After you dispatch: watch to terminal state (do this automatically)
+
+The instant you run a real `launch-worker.sh` / `launch-checker.sh` (not
+`--dry-run`) this session, begin watching that dispatch to its terminal state —
+**automatically, with no "watch them" prompt from the operator**. Watch exactly
+the item(s) you dispatched this session, and keep watching until **every** one is
+terminal — no cap on how many, and no time limit (a worker can run many minutes).
+
+Detect terminal state from **local** signals only — zero GitHub calls per tick —
+with `bin/watch-dispatch.sh`, which encapsulates exactly this detection so you
+never reconstruct it by hand. Dispatches run detached (their own session; no job
+handle to `wait` on), but each leaves a trail the launcher updates on exit: a
+`ledger.md` `status` field that flips off `dispatched` to a terminal value
+(`done`, `interrupted-ratelimit`, `interrupted-budget`, `interrupted-error`,
+`unknown`), and — for a checker — a written `logs/<slug>-pr-<n>-verdict.json`.
+(`ledger.md`/`logs/` live at the derailleur checkout path in your session context.)
+
+Invoke the script by that checkout's absolute path (or `dr watch-dispatch`),
+passing one slug-qualified token per item you dispatched this session:
+
+- worker: `<slug>#<issue>`  (e.g. `derailleur#26`)
+- checker: `<slug>#pr<n>`   (e.g. `derailleur#pr30`)
+
+It prints **one line per item the instant it goes terminal** and exits once every
+watched item is terminal — no cap, no time limit. It fires on the interrupt/crash
+statuses (`interrupted-*`, `unknown`, and a dead-but-unfinalized pid) exactly as on
+`done` / a written verdict, so **a crashed or interrupted dispatch is never watched
+in silence** — that guarantee is in the script, not something you must remember.
+
+**Prefer `Monitor` (non-blocking) if it is in your toolset.** Wrap the script in one
+persistent `Monitor` so its per-item lines stream to you as notifications while you
+**stay responsive to the operator**:
+
+    Monitor: <your derailleur checkout>/bin/watch-dispatch.sh derailleur#26 derailleur#pr30
+
+Set `persistent: true` (a worker can outlast the default timeout); the script polls
+about every 15s (tune with `--interval N`) and exits itself once all items are
+terminal.
+
+**If `Monitor` is NOT in your toolset,** run the same script **blocking** — identical
+terminal-state semantics; the only cost is that you can't take operator input until it
+returns.
+
+**On each terminal event, report the item + its authoritative outcome**, resolving
+the GitHub-side state with a **single** `board-digest.sh` (or `gh pr view`) call
+per event — never per tick:
+
+- worker `done` → its PR is now ready (un-drafted), awaiting a checker → offer to
+  dispatch one;
+- checker verdict `checked-pass` → ready to merge — the operator's court (surface,
+  never merge); `resume` → back to the worker's court; a `needs-input` label →
+  escalation, the operator's court;
+- any `interrupted-*` / `unknown` → say so plainly (the launcher already pushed any
+  stranded commits and commented on the issue); a redispatch resumes it.
+
 ## Coordinating with the autonomous scheduler
 
 Derailleur can ALSO dispatch on its own, on a launchd timer — the autonomous
