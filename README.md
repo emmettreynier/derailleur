@@ -189,8 +189,10 @@ loads board state and proposes what to dispatch, acting only on your explicit OK
 Rendered into `~/.claude/commands/` by `install.sh` (the one `~/.claude/` carve-out).
 It **proposes, then dispatches workers and checkers only after you confirm** — never
 autonomously, and it never merges. Its tools are scoped to the board digest, the two
-launchers, and read-only `gh`. For a session booted from this checkout with the digest
-pre-injected (same posture), use `./bin/launch-orchestrator.sh` instead.
+launchers, read-only `gh`, and the `Monitor` tool (so it can watch the workers/checkers
+it dispatched to completion without blocking your session). For a session booted from
+this checkout with the digest pre-injected (same posture), use
+`./bin/launch-orchestrator.sh` instead.
 
 ### Run one orchestration pass by hand
 
