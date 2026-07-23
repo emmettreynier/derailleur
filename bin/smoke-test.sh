@@ -294,6 +294,29 @@ printf '%s' "$dr_out" | grep -qF "$TR_DATA/logs/$TR_NAME.log" || fail \
   "The --dry-run branch must precede any mkdir in bin/tmux-run.sh."
 pass "tmux-run: --dry-run derives canonical name + <data_root>/logs path, creates nothing"
 
+# --tail flag (issue #22 follow-up): overrides the log-tail length; validated as an
+# integer. Both checks are dry-run only (offline, no tmux, nothing spent).
+rc=0; "$TRROOT/bin/tmux-run.sh" zz-smoke 7 --tail 5 --dry-run >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || fail \
+  "tmux-run --tail 5 --dry-run exited nonzero ($rc)." \
+  "The --tail N flag must be parsed before '--'; see the arg loop in bin/tmux-run.sh."
+rc=0; "$TRROOT/bin/tmux-run.sh" zz-smoke 7 --tail bogus --dry-run >/dev/null 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail \
+  "tmux-run --tail bogus was accepted (must reject a non-integer)." \
+  "The --tail validation (case '*[!0-9]*') is missing/broken in bin/tmux-run.sh."
+pass "tmux-run: --tail N accepts an integer and rejects a non-integer"
+
+# {{SLUG}} token wiring (issue #22 follow-up): the brief must invoke the wrapper with the
+# rendered {{SLUG}} token, and launch-worker.sh must supply BRIEF_SLUG for it — a static
+# both-ends check so the token can't be present in one file and unwired in the other.
+grep -qF 'dr tmux-run {{SLUG}}' "$ORCH/briefs/worker-brief.md" || fail \
+  "worker-brief.md does not invoke 'dr tmux-run {{SLUG}}'." \
+  "The brief should render the slug token, not describe '<repo-slug>' — see briefs/worker-brief.md."
+grep -q 'BRIEF_SLUG=' "$ORCH/bin/launch-worker.sh" || fail \
+  "launch-worker.sh does not set BRIEF_SLUG for the brief render." \
+  "Add BRIEF_SLUG=\"\$REPO_SLUG\" to the render_brief invocation in bin/launch-worker.sh."
+pass "tmux-run: {{SLUG}} token wired end-to-end (brief invokes it, launcher supplies it)"
+
 # live mutex walk — needs tmux; SKIP cleanly (never fail) when it's unavailable.
 if ! command -v tmux >/dev/null 2>&1; then
   skip "tmux not installed — skipping tmux-run live mutex case"

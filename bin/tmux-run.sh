@@ -25,6 +25,8 @@
 #                `repo:` and `data_root:` itself, so the worker passes only slug/issue/cmd.
 #   <cmd...>     everything after `--` is the command to run detached. Each argument is
 #                preserved verbatim (shell-quoted); the wrapper appends `2>&1 | tee <log>`.
+#   --tail N     on an existing session, show the last N lines of its log (default 20,
+#                or $TMUX_RUN_TAIL). The flag wins over the env var.
 #
 # Canonical name : derail-<owner-repo>-<issue>   (<owner-repo> = manifest `repo:` with /->-)
 # Durable log    : <data_root>/logs/derail-<owner-repo>-<issue>.log
@@ -42,7 +44,7 @@ ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 die() { echo "tmux-run: $*" >&2; exit 1; }
 
-TAIL_LINES="${TMUX_RUN_TAIL:-20}"   # log-tail length on an existing session
+TAIL_LINES="${TMUX_RUN_TAIL:-20}"   # log-tail length on an existing session (env/default; --tail overrides)
 
 # --- args ---------------------------------------------------------------------
 # Positional slug/issue first (mirrors launch-worker.sh), then optional flags, then
@@ -57,8 +59,12 @@ CMD_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
+    --tail)
+      [ $# -ge 2 ] || die "--tail needs a number (usage: --tail N)"
+      case "$2" in ''|*[!0-9]*) die "--tail needs a non-negative integer, got: $2" ;; esac
+      TAIL_LINES="$2"; shift 2 ;;
     --) shift; HAVE_CMD=1; [ $# -gt 0 ] && CMD_ARGS=("$@"); break ;;
-    *) die "unexpected arg before '--': $1 (usage: tmux-run.sh <repo-slug> <issue> -- <cmd...>)" ;;
+    *) die "unexpected arg before '--': $1 (usage: tmux-run.sh <repo-slug> <issue> [--tail N] -- <cmd...>)" ;;
   esac
 done
 

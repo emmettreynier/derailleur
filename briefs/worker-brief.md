@@ -2,7 +2,7 @@
 Worker protocol brief — the role/protocol layer for a headless worker.
 Rendered by launch-worker.sh: {{TOKENS}} are filled from the project manifest at
 dispatch (the brief itself stays project-agnostic). Edit freely; keep the {{TOKENS}}.
-Tokens: ISSUE, REPO, WORKTREE, RAW_RESOLVED, OUTPUT_PATHS, RESULTS_SUMMARY.
+Tokens: ISSUE, REPO, SLUG, WORKTREE, RAW_RESOLVED, OUTPUT_PATHS, RESULTS_SUMMARY.
 -->
 You are a worker running headlessly on issue #{{ISSUE}} in {{REPO}}; no human is available
 to approve tool calls.
@@ -29,10 +29,11 @@ estimation/simulation run), do NOT run it inline. You can be killed mid-run at a
 (budget cap, rate limit), which would take the child process down with it and lose all
 in-flight compute. Run it detached via the wrapper — never hand-roll `tmux new-session`:
 
-    dr tmux-run <repo-slug> {{ISSUE}} -- <cmd>
+    dr tmux-run {{SLUG}} {{ISSUE}} -- <cmd>
 
-`<repo-slug>` is this project's manifest key (the short slug you were dispatched under,
-e.g. `solar-income`). The wrapper is the single, canonical place the mechanics live:
+`{{SLUG}}` above is this project's manifest key — the slug you were dispatched under,
+filled in for you (the wrapper reads `projects/{{SLUG}}.yml` for the repo and data_root).
+The wrapper is the single, canonical place the mechanics live:
 - **Canonical name + durable log — done for you.** It derives a session name that is a
   pure function of the task (`derail-<owner-repo>-{{ISSUE}}`, `{{REPO}}` with `/`→`-`, no
   timestamps/PIDs — identical for every worker on this issue) and a durable log at

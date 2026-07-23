@@ -132,7 +132,8 @@ PY
 )"
 
 # --- worker protocol brief (system prompt; project-agnostic, manifest-filled) --
-BRIEF="$(BRIEF_ISSUE="$ISSUE" BRIEF_REPO="$REPO" BRIEF_WORKTREE="$WORKTREE" \
+BRIEF="$(BRIEF_ISSUE="$ISSUE" BRIEF_REPO="$REPO" BRIEF_SLUG="$REPO_SLUG" \
+         BRIEF_WORKTREE="$WORKTREE" \
          BRIEF_RAW_RESOLVED="$RAW_RESOLVED" BRIEF_OUTPUT_PATHS="$OUTPUT_PATHS" \
          BRIEF_RESULTS_SUMMARY="$RESULTS_SUMMARY" \
          render_brief "$BRIEF_FILE")"
