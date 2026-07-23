@@ -58,6 +58,75 @@ session context (the launcher's boot line or the /orchestrate command body):
     launch-worker.sh  <slug> <issue#> [--dry-run] [--budget USD]   # land an issue
     launch-checker.sh <slug> <pr#>    [--dry-run] [--budget USD]   # review a ready PR
 
+## After you dispatch: watch to terminal state (do this automatically)
+
+The instant you run a real `launch-worker.sh` / `launch-checker.sh` (not
+`--dry-run`) this session, begin watching that dispatch to its terminal state —
+**automatically, with no "watch them" prompt from the operator**. Watch exactly
+the item(s) you dispatched this session, and keep watching until **every** one is
+terminal — no cap on how many, and no time limit (a worker can run many minutes).
+
+Detect terminal state from **local** signals only — zero GitHub calls per tick.
+Dispatches run detached (their own session; no job handle to `wait` on), but each
+leaves a trail the launcher updates on exit:
+
+- Each dispatch appends a `ledger.md` line whose final field is `status <value>`,
+  set to `dispatched` at launch:
+  - worker: `- #<issue> | … | status dispatched`
+  - checker: `- check pr#<n> | … | status dispatched`
+  When the session exits, the launcher flips that field to a terminal value —
+  `done`, `interrupted-ratelimit`, `interrupted-budget`, `interrupted-error`, or
+  `unknown`. **Status ≠ `dispatched` ⇒ that item is terminal.**
+- A checker additionally writes `logs/<slug>-pr-<n>-verdict.json` on a completed
+  review. (`ledger.md` and `logs/` live at the derailleur checkout path given in
+  your session context.)
+
+**Prefer `Monitor` (non-blocking) if it is in your toolset.** Arm one persistent
+`Monitor` whose command polls those local signals about every 15s and prints
+**one line per dispatched item the instant it goes terminal**, then exits once
+every watched item is terminal. Set `persistent: true` (a worker can outlast the
+default timeout). Because `Monitor` is non-blocking, you **stay responsive to the
+operator** while it runs. A sketch — resolve `$ORCH` to the checkout path from
+your session context, and list the items you actually dispatched:
+
+    ORCH=<your derailleur checkout>
+    remaining=2                       # count of items you dispatched this session
+    st() { grep -E "^$1 \\|" "$ORCH/ledger.md" | tail -1 | sed -n 's/.*status //p'; }
+    while [ "$remaining" -gt 0 ]; do
+      # worker #12
+      s=$(st '- #12'); case "$s" in ''|dispatched) : ;;
+        *) echo "worker #12 -> $s"; remaining=$((remaining-1)); ;; esac  # unset #12 after firing
+      # checker pr#7 (terminal on status flip OR verdict file)
+      s=$(st '- check pr#7')
+      if [ -f "$ORCH/logs/<slug>-pr-7-verdict.json" ] || { [ -n "$s" ] && [ "$s" != dispatched ]; }; then
+        echo "checker pr#7 -> ${s:-verdict-written}"; remaining=$((remaining-1)); fi
+      sleep 15
+    done
+
+(Track which items have already fired so you don't double-count — e.g. drop each
+from the loop once emitted. Adapt the sketch to the exact items and slugs.)
+
+**Silence is not success.** The loop must emit on the interrupt/crash statuses
+(`interrupted-*`, `unknown`) exactly as it does on `done` / verdict-written, so an
+interrupted or crashed dispatch is never watched in silence.
+
+**If `Monitor` is NOT in your toolset,** fall back to a **blocking** local-signal
+wait with identical terminal-state semantics: poll the same ledger-status /
+verdict-file signals in a loop until every dispatched item is terminal, then
+report. The only cost is that you can't take operator input until it ends.
+
+**On each terminal event, report the item + its authoritative outcome**, resolving
+the GitHub-side state with a **single** `board-digest.sh` (or `gh pr view`) call
+per event — never per tick:
+
+- worker `done` → its PR is now ready (un-drafted), awaiting a checker → offer to
+  dispatch one;
+- checker verdict `checked-pass` → ready to merge — the operator's court (surface,
+  never merge); `resume` → back to the worker's court; a `needs-input` label →
+  escalation, the operator's court;
+- any `interrupted-*` / `unknown` → say so plainly (the launcher already pushed any
+  stranded commits and commented on the issue); a redispatch resumes it.
+
 ## Coordinating with the autonomous scheduler
 
 Derailleur can ALSO dispatch on its own, on a launchd timer — the autonomous

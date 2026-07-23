@@ -55,6 +55,15 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
+# Tool scope: this launcher sets NO --allowedTools, so the session inherits the
+# full interactive toolset — which already includes `Monitor`, the harness tool
+# the brief's post-dispatch watch uses (issue #26). Nothing to widen here: unlike
+# the /orchestrate slash command (whose allow-list must name `Monitor` explicitly,
+# and now does), a launcher-booted session is human-present and deliberately left
+# unrestricted, so DON'T add an allow-list here — that would NARROW the scope and
+# break the operator's ability to read/inspect during a session. The autonomous
+# cycle stays untouched (separate brief + one-shot `claude -p`, which exits before
+# Monitor events could arrive).
 ORCHESTRATOR=1 exec claude \
   --settings "$SETTINGS_JSON" \
   --append-system-prompt "$BRIEF" \

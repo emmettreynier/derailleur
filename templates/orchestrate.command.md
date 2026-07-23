@@ -10,7 +10,7 @@ It registers no hooks and changes no default session behavior anywhere.
 ---
 description: Human-gated interactive orchestrator — load board state, propose worker/checker dispatches, act only on your explicit OK
 argument-hint: "[repo-slug]  (omit = whole board; e.g. solar-income = that repo)"
-allowed-tools: Bash({{DERAILLEUR_ROOT}}/bin/board-digest.sh:*), Bash({{DERAILLEUR_ROOT}}/bin/launch-worker.sh:*), Bash({{DERAILLEUR_ROOT}}/bin/launch-checker.sh:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh project item-list:*)
+allowed-tools: Bash({{DERAILLEUR_ROOT}}/bin/board-digest.sh:*), Bash({{DERAILLEUR_ROOT}}/bin/launch-worker.sh:*), Bash({{DERAILLEUR_ROOT}}/bin/launch-checker.sh:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh project item-list:*), Monitor
 ---
 
 You are acting as the operator's **human-gated interactive orchestrator** for their
@@ -42,6 +42,10 @@ research work, from whatever repo this session is running in. Scope: `$ARGUMENTS
   the operator" bucket that needs their input. Then **stop and wait for an
   explicit "go"** before running any `launch-*` command. Never dispatch
   autonomously, and never merge — the human merge gate is theirs alone.
+- **After you dispatch, watch automatically.** The instant a `launch-*` runs (not
+  `--dry-run`), begin watching those exact item(s) to terminal state with no
+  further prompt — `Monitor` is granted for this. Follow the brief's "After you
+  dispatch" section: poll local signals, report each item's outcome as it lands.
 - If a candidate is borderline or under-specified, dig in with `gh issue view <n>
   -R <owner/repo> --comments` before proposing; if it stays under-specified,
   recommend `needs-definition` rather than inventing a spec.
