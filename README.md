@@ -39,9 +39,10 @@ levels across many different speeds 🤷🚲
 3. `gh auth login`.
 4. `./bin/install.sh` — dep-checks (`gh`/`jq`/`claude`/`python3`/`git`), asserts the
    in-repo host hooks are executable, creates `logs/` + `state/`, scaffolds
-   `orchestrator.conf` from `orchestrator.conf.example`, and renders the opt-in
+   `orchestrator.conf` from `orchestrator.conf.example`, renders the opt-in
    `/orchestrate` slash command into `~/.claude/commands/` (the one, narrow
-   `~/.claude/` carve-out — see below). Idempotent.
+   `~/.claude/` carve-out — see below), and symlinks the `derailleur`/`dr` CLI
+   into `~/.local/bin` (see *The `derailleur` / `dr` command* below). Idempotent.
 5. Fill in `orchestrator.conf` with your identity (`OPERATOR_NAME`, `GITHUB_HANDLE`,
    `PR_OWNER`, `LAUNCHD_LABEL`, `BOARD_PROJECT`) — it's gitignored and per-operator. Every field is required; the
    scripts abort with guidance if any is blank. See `orchestrator.conf.example` for more information.
@@ -76,7 +77,10 @@ regression is caught here, not on a labmate's first real run.
 **What it checks** (against throwaway temp confs — it never touches your real one):
 a missing conf aborts; a conf with a blank field aborts *and names the field*; a
 fully-filled conf exits 0, exports all five vars, and renders `{{OPERATOR_NAME}}`
-into a brief the way the launchers do. If a real `orchestrator.conf` is present it
+into a brief the way the launchers do. It also exercises the `derailleur`/`dr` CLI
+dispatcher — `help`/unknown-command/sourced-lib routing, and (the subtle part)
+that it resolves back to this checkout when invoked through a symlink, the way
+`install.sh` links it onto PATH. If a real `orchestrator.conf` is present it
 also confirms *your* conf passes the guard, and — when `gh` is authenticated —
 that `launch-orchestrator.sh --dry-run` renders your board digest. It asserts your
 real conf is byte-identical before and after.
@@ -151,6 +155,26 @@ Unset, it falls back to the night-heavy default; a malformed slot (not `HH:MM`) 
 loud at `install` rather than producing a broken plist.
 
 ## Usage
+
+### The `derailleur` / `dr` command
+
+`install.sh` symlinks a small dispatcher onto your PATH so every `./bin/<script>.sh`
+below can be run from **any** directory as `derailleur <command>` — or the short
+`dr <command>`. It forwards all arguments through unchanged, so every flag documented
+here works identically:
+
+```bash
+dr launch-worker solar-income 1 --dry-run    # == ./bin/launch-worker.sh solar-income 1 --dry-run
+dr orchestrator-cycle --dry-run
+dr worktree-prune --auto
+dr help                                        # list every available command
+```
+
+The examples below show the `./bin/<script>.sh` form (which always works from the repo
+root); read `dr <command>` as the equivalent shortcut from anywhere. Two caveats: the
+symlink lives in `~/.local/bin`, which must be on your PATH (install warns, with the
+exact `~/.zshrc` line, if it isn't); and because the symlink points back into this
+checkout, **re-run `./bin/install.sh` if you move the repo** — same as `/orchestrate`.
 
 ### Interactive orchestrator (human-gated)
 
@@ -258,7 +282,8 @@ derailleur/
 │   └── pr-results-summary.md        The results-summary PR template workers fill in
 ├── host/hooks/                   PreToolUse / Stop / SessionStart hooks (the safety layer)
 ├── host/LaunchAgents/            launchd plist template for the scheduled loop
-├── bin/                          All shell entrypoints (invoke as ./bin/<script>.sh)
+├── bin/                          All shell entrypoints (invoke as ./bin/<script>.sh, or via the `dr` CLI)
+│   ├── derailleur                CLI dispatcher: `derailleur`/`dr <cmd>` -> bin/<cmd>.sh (linked onto PATH by install)
 │   ├── install.sh                One-time host bootstrap
 │   ├── new-project.sh             Per-project onboarding
 │   ├── setup-labels.sh            (Re-)creates the label set on a repo

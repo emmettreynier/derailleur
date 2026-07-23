@@ -22,6 +22,15 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   script to `bin/`, and reference sibling scripts/briefs as `$ORCH/bin/...` /
   `$ORCH/briefs/...` (everything else — `projects/`, `templates/`, `host/`,
   `ledger.md`, `logs/`, `state/` — stays directly under `$ORCH`).
+- `bin/derailleur` is the one **extensionless** script (the user-facing CLI name,
+  like `git`), so it's deliberately outside the `bin/*.sh` glob that `install.sh`
+  uses for chmod and that the dispatcher's own `help` uses to list commands — it
+  never lists or dispatches to itself. It is invoked via a symlink from
+  `~/.local/bin` (created by `install.sh`), so it can't use the plain
+  `dirname/..` root resolution the other scripts use: it walks the symlink chain
+  first (portable loop, no `readlink -f` — macOS bash 3.2 lacks it), then takes
+  `bin/..`. It bakes in **no path**; moving the repo needs a re-run of
+  `install.sh` to refresh the symlink (same caveat as `/orchestrate`).
 - Scripts use `set -euo pipefail`. macOS ships bash 3.2: expanding an **empty array**
   under `set -u` (e.g. `"${flag[@]}"` with no `--force`) is a fatal `unbound
   variable` error — branch on the flag instead of building-then-expanding an
