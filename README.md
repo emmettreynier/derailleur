@@ -47,7 +47,7 @@ levels across many different speeds 🤷🚲
 5. Fill in `orchestrator.conf` with your identity (`OPERATOR_NAME`, `GITHUB_HANDLE`,
    `PR_OWNER`, `LAUNCHD_LABEL`, `BOARD_PROJECT`) — it's gitignored and per-operator. Every field is required; the
    scripts abort with guidance if any is blank. See `orchestrator.conf.example` for more information.
-6. Verify: `claude --version`, then a dry run: `./bin/launch-orchestrator.sh --dry-run`.
+6. Verify: `claude --version`, then a dry run: `dr launch-orchestrator --dry-run`.
 
 This registers **no hooks and no default behavior** in `~/.claude/` — the worker/checker
 safety hooks are passed to each dispatch by in-repo path, so your normal interactive
@@ -68,7 +68,7 @@ the file there or repoint `~/.claude/commands` somewhere unversioned.
 
 ### Verify / smoke test
 
-`./bin/smoke-test.sh` is a one-command check that the operator-identity bootstrap
+`dr smoke-test` is a one-command check that the operator-identity bootstrap
 still works. All dispatch flows through a single guard in `bin/config-common.sh`,
 which reads your gitignored `orchestrator.conf` and aborts if it's missing or any of
 the five fields (`OPERATOR_NAME`, `GITHUB_HANDLE`, `PR_OWNER`, `LAUNCHD_LABEL`,
@@ -97,7 +97,7 @@ real conf is byte-identical before and after.
 **How to run it:**
 
 ```bash
-./bin/smoke-test.sh            # prints PASS / SKIP per check; exits 0 if all pass
+dr smoke-test            # prints PASS / SKIP per check; exits 0 if all pass
 ```
 
 **How to read a failure:** each check prints a `PASS:` line; steps that need the
@@ -109,7 +109,7 @@ passes offline). On the first failed check the script prints a `FAIL:` line sayi
 
 1. Choose an **archetype**: `git-native` (preferred — repo is git-only, data is a
    symlink) or `dropbox-native` (coauthored/legacy — repo lives in Dropbox).
-2. `./bin/new-project.sh <owner/repo> [--archetype …] [--clone …] [--worktrees …]` —
+2. `dr new-project <owner/repo> [--archetype …] [--clone …] [--worktrees …]` —
    creates the label set, ensures an out-of-Dropbox working clone + worktrees dir,
    and scaffolds `projects/<repo>.yml`. Idempotent.
 3. Fill the scaffolded manifest's TODOs — board `project`, `raw_resolved`, and
@@ -123,18 +123,18 @@ passes offline). On the first failed check the script prints a `FAIL:` line sayi
 6. **Shared repos:** get coauthor buy-in before enabling `main` branch protection;
    otherwise rely on the agent's deny-hook for "no pushes to `main`."
 7. Author one well-specified issue (clear goal + acceptance criteria + defined
-   outputs) and dry-run a worker by hand: `./bin/launch-worker.sh <slug> <issue#> --dry-run`.
+   outputs) and dry-run a worker by hand: `dr launch-worker <slug> <issue#> --dry-run`.
 
 A few steps are irreducibly manual (not CLI-scriptable): GitHub board view
 membership/filters, Dropbox "Available offline" pinning, `gh`/Dropbox
 authentication, and coauthor buy-in for shared-repo branch protection.
 
-> **If you run a per-repo autonomous allow-list** (`schedule.sh enable/disable`,
+> **If you run a per-repo autonomous allow-list** (`dr schedule enable/disable`,
 > below), a newly onboarded repo is **excluded from the automated loop until you
-> `./bin/schedule.sh enable <slug>`** — the allow-list is opt-in per repo, so
+> `dr schedule enable <slug>`** — the allow-list is opt-in per repo, so
 > onboarding alone doesn't put a repo on the cron budget. (With no allow-list set —
 > the default — onboarding is enough; every onboarded repo dispatches autonomously.)
-> Manual `launch-worker.sh <slug> <issue#>` works immediately either way.
+> Manual `dr launch-worker <slug> <issue#>` works immediately either way.
 
 ### Enable the scheduled loop (optional)
 
@@ -142,9 +142,9 @@ Once you trust a project's setup, you can let the orchestrator run itself on a
 timer instead of triggering it by hand:
 
 ```bash
-./bin/schedule.sh install       # registers the launchd timer, ships in plan-only mode
-./bin/schedule.sh run --dry-run # trigger one cycle by hand — free, dispatches nothing
-./bin/schedule.sh live          # flip the switch that lets scheduled runs actually spend
+dr schedule install       # registers the launchd timer, ships in plan-only mode
+dr schedule run --dry-run # trigger one cycle by hand — free, dispatches nothing
+dr schedule live          # flip the switch that lets scheduled runs actually spend
 ```
 
 By default it runs night-heavy (roughly 8pm/11pm/2am/5am/8am on weeknights, jittered)
@@ -159,8 +159,8 @@ so the two can never desync:
 
 ```bash
 # in orchestrator.conf:  SCHEDULE_SLOTS="00:00 01:00 02:00 ... 23:00"   # e.g. hourly
-./bin/schedule.sh install       # re-render the plist + re-seed the wake chain from it
-./bin/schedule.sh status        # confirm the slots now in effect
+dr schedule install       # re-render the plist + re-seed the wake chain from it
+dr schedule status        # confirm the slots now in effect
 ```
 
 Unset, it falls back to the night-heavy default; a malformed slot (not `HH:MM`) fails
