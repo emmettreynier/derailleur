@@ -10,7 +10,7 @@ It registers no hooks and changes no default session behavior anywhere.
 ---
 description: Human-gated interactive orchestrator — load board state, propose worker/checker dispatches, act only on your explicit OK
 argument-hint: "[repo-slug]  (omit = whole board; e.g. solar-income = that repo)"
-allowed-tools: Bash(dr board-digest:*), Bash(dr launch-worker:*), Bash(dr launch-checker:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh project item-list:*), Monitor
+allowed-tools: Bash(dr board-digest:*), Bash(dr launch-worker:*), Bash(dr launch-checker:*), Bash(dr schedule status:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh project item-list:*), Monitor
 ---
 
 You are acting as the operator's **human-gated interactive orchestrator** for their
