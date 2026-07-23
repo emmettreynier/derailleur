@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# derailleur — CLI dispatcher. `derailleur <cmd> [args...]` runs bin/<cmd>.sh
+# from anywhere, forwarding every argument through unchanged. Also linked as `dr`.
+#
+# This is the ONE extensionless script in bin/ (it's the user-facing binary name,
+# like `git`/`gh`), so it's not matched by the `bin/*.sh` glob install.sh uses for
+# chmod/listing — install.sh makes it executable explicitly, and `help` lists only
+# the *.sh commands (never itself). It carries NO baked-in path: install.sh symlinks
+# it onto PATH, and it resolves that symlink back to this checkout so the launchers
+# still see $ORCH = repo root. Move the repo -> re-run install.sh (the symlink goes
+# stale until then), same caveat as the /orchestrate command.
+set -euo pipefail
+
+# Walk the symlink chain (portable; macOS bash 3.2 has no `readlink -f`) so that
+# whether invoked as ~/.local/bin/dr or ./bin/derailleur we land on the real file.
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+BIN="$(cd -P "$(dirname "$src")" && pwd)"
+self="$(basename "$0")"   # 'derailleur' or 'dr' — echoed back in usage
+
+list_cmds() {
+  for f in "$BIN"/*.sh; do
+    [ -e "$f" ] || continue
+    name="$(basename "$f" .sh)"
+    # dispatch-common / config-common are SOURCED libs, not runnable commands.
+    case "$name" in dispatch-common|config-common) continue ;; esac
+    printf '  %s\n' "$name"
+  done
+}
+
+usage() {
+  cat <<EOF
+derailleur — run derailleur commands from anywhere.
+
+Usage: $self <command> [args...]
+       $self help
+
+Each command forwards to $BIN/<command>.sh with all arguments passed through,
+so every flag works exactly as it does calling the script directly.
+
+Commands:
+$(list_cmds)
+
+Examples:
+  $self launch-worker solar-income 1 --dry-run
+  $self orchestrator-cycle --dry-run
+  $self worktree-prune --auto
+EOF
+}
+
+cmd="${1:-help}"
+case "$cmd" in
+  help|-h|--help) usage; exit 0 ;;
+esac
+shift
+
+case "$cmd" in
+  dispatch-common|config-common)
+    printf 'derailleur: %s is a sourced library, not a runnable command\n' "$cmd" >&2
+    exit 2
+    ;;
+esac
+
+target="$BIN/$cmd.sh"
+if [ ! -f "$target" ]; then
+  printf 'derailleur: unknown command: %s\n\n' "$cmd" >&2
+  usage >&2
+  exit 2
+fi
+
+exec "$target" "$@"

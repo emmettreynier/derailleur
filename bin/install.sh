@@ -136,6 +136,40 @@ else
   warn "template missing: $CMD_TEMPLATE — skipped /orchestrate command render"
 fi
 
+# --- CLI dispatcher on PATH (derailleur / dr) --------------------------------
+# Symlink the extensionless bin/derailleur dispatcher onto the user's PATH so any
+# command runs from anywhere as `derailleur <cmd>` / `dr <cmd>` instead of
+# ./bin/<cmd>.sh. The dispatcher walks the symlink back to THIS checkout (it bakes
+# in no path), so moving the repo just needs a re-run of install.sh — the symlink
+# is stale until then (same caveat as /orchestrate above). Idempotent: we refresh
+# the symlink each run and never clobber a non-symlink of the same name.
+CLI_SRC="$ORCH/bin/derailleur"
+CLI_BIN_DIR="$HOME/.local/bin"
+if [ -f "$CLI_SRC" ]; then
+  chmod +x "$CLI_SRC"
+  mkdir -p "$CLI_BIN_DIR"
+  linked=0
+  for name in derailleur dr; do
+    dest="$CLI_BIN_DIR/$name"
+    if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+      warn "not overwriting $dest — a non-symlink file already exists there (remove it and re-run to link '$name')."
+      continue
+    fi
+    ln -sf "$CLI_SRC" "$dest"
+    linked=$((linked + 1))
+  done
+  [ "$linked" -gt 0 ] && note "✓ linked derailleur + dr into $CLI_BIN_DIR"
+  case ":$PATH:" in
+    *":$CLI_BIN_DIR:"*) note "✓ $CLI_BIN_DIR is on your PATH" ;;
+    *)
+      warn "$CLI_BIN_DIR is not on your PATH — add this line to ~/.zshrc, then restart your shell:"
+      warn '    export PATH="$HOME/.local/bin:$PATH"'
+      ;;
+  esac
+else
+  warn "dispatcher missing: $CLI_SRC — skipped derailleur/dr link"
+fi
+
 # --- next steps (opt-in; this script does not run them) -----------------------
 cat <<EOF
 
