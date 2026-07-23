@@ -56,8 +56,14 @@ if [ -n "$SLUG_FILTER" ]; then
   onboarded_slugs="$SLUG_FILTER"
 fi
 
+# Per-repo autonomous-dispatch allow-list (state/scheduled-repos, via the shared
+# config-common.sh reader). Non-empty ⇒ onboarded repos NOT listed are still shown
+# (automated-loop-only scope) but annotated scheduler-paused; empty/absent ⇒ no
+# annotation (all onboarded repos are autonomously dispatchable).
+scheduled_allow="$(scheduled_repos | paste -sd, - || true)"
+
 BOARD_JSON="$board_json" CLOSED_JSON="$closed_json" PR_OWNER="$PR_OWNER" \
-OPERATOR_NAME="$OPERATOR_NAME" \
+OPERATOR_NAME="$OPERATOR_NAME" SCHEDULED_ALLOW="$scheduled_allow" \
 LEDGER="$LEDGER" DONE_DAYS="$DONE_DAYS" ONBOARDED_SLUGS="$onboarded_slugs" python3 <<'PY'
 import json, os, re, subprocess, sys
 from datetime import datetime, timezone, timedelta
@@ -100,6 +106,13 @@ for it in board:
 # footer so the rest of the board is never silently invisible.
 onboarded = {s for s in os.environ.get("ONBOARDED_SLUGS", "").split(",") if s}
 def is_onboarded(repo_url): return short(repo_url) in onboarded
+
+# Autonomous-dispatch allow-list: when non-empty, onboarded repos NOT in it are
+# "scheduler-paused" — the cron loop skips them, but they stay visible in the digest
+# (manual/interactive dispatch still works). Empty ⇒ no repo is paused (all live).
+sched_allow = {s for s in os.environ.get("SCHEDULED_ALLOW", "").split(",") if s}
+paused = (onboarded - sched_allow) if sched_allow else set()
+def is_paused(repo_url): return short(repo_url) in paused
 all_rows = rows
 rows = [r for r in all_rows if is_onboarded(r["repo_url"])]
 excluded_rows  = [r for r in all_rows if not is_onboarded(r["repo_url"])]
@@ -223,9 +236,10 @@ def line(r, extra=""):
     labs = sorted(r["labels"])
     tag = " {" + ",".join(labs) + "}" if labs else ""
     flag = " ⚙ in-flight" if is_live_inflight(r) else ""
+    pause = " ⏸ scheduler-paused" if is_paused(r["repo_url"]) else ""
     t = r["title"]
     if len(t) > 72: t = t[:69] + "…"
-    return f"- [{r['project']}] {short(r['repo_url'])}#{r['num']} — {t}{tag}{flag}{extra}"
+    return f"- [{r['project']}] {short(r['repo_url'])}#{r['num']} — {t}{tag}{flag}{pause}{extra}"
 
 def spec_excerpt(body):
     """The intake-gate signal for a dispatch candidate: a one-line lead plus its
@@ -255,6 +269,10 @@ def w(s=""): out.append(s)
 
 w(f"# Board digest — {now.strftime('%Y-%m-%d %H:%M UTC')}")
 w(f"_Scoped to onboarded repos ({', '.join(sorted(onboarded)) or 'none'}) — the orchestrator's dispatchable world._")
+if paused:
+    w(f"_Autonomous-dispatch allow-list active — repos marked ⏸ scheduler-paused "
+      f"({', '.join(sorted(paused))}) are onboarded but excluded from the cron loop; "
+      f"manual launch-*.sh and interactive /orchestrate still work on them._")
 w()
 
 # ---- classify open PRs into review-pipeline buckets -------------------------

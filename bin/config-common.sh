@@ -43,3 +43,28 @@ if [ -n "$_conf_missing" ]; then
 fi
 
 export OPERATOR_NAME GITHUB_HANDLE PR_OWNER LAUNCHD_LABEL BOARD_PROJECT
+
+# --- per-repo autonomous-dispatch allow-list ---------------------------------
+# state/scheduled-repos lists the slugs the AUTONOMOUS loop (orchestrator-cycle.sh,
+# whether cron- or hand-triggered) is allowed to dispatch on — one slug per line,
+# machine-local, gitignored with the rest of state/. Polarity is allow-list-WHEN-SET:
+#   absent or empty  ⇒ ALL onboarded repos dispatch autonomously (backward-compatible)
+#   non-empty        ⇒ ONLY the listed slugs dispatch autonomously
+# It NEVER affects manual launch-worker.sh/launch-checker.sh or interactive /orchestrate
+# — those operate on any onboarded repo regardless. This is the single reader so that
+# orchestrator-cycle.sh, board-digest.sh, and schedule.sh can't drift apart.
+SCHEDULED_REPOS_FILE="${SCHEDULED_REPOS_FILE:-$_conf_root/state/scheduled-repos}"
+export SCHEDULED_REPOS_FILE
+
+# scheduled_repos — echo the allow-list slugs, one per line, with comments (# …),
+# leading/trailing whitespace, and blank lines stripped. Empty output ⇒ no allow-list
+# in effect. Callers MUST branch on emptiness rather than expanding the result into a
+# bash array unconditionally (an empty array under `set -u` is a fatal unbound-variable
+# error on the bash 3.2 macOS ships — see CLAUDE.md). Ends with an explicit `return 0`
+# so a caller invoking it bare isn't aborted when the file is absent / all-comment.
+scheduled_repos() {
+  [ -f "$SCHEDULED_REPOS_FILE" ] || return 0
+  sed -E 's/#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' "$SCHEDULED_REPOS_FILE" \
+    | grep -v '^$' || true
+  return 0
+}
