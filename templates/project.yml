@@ -51,6 +51,13 @@ worktrees_dir: {{WORKTREES_DIR}}
 data_root: {{DATA_ROOT}}
 raw_resolved: TODO              # raw tree data/raw points at; for a code-only repo, = working_clone (see above)
 dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "available offline"
+# dropbox_proj: OPTIONAL. Only for a repo that ships its own setup-symlinks.sh AND whose
+# Dropbox root differs from that script's built-in default. The launcher runs the repo's
+# setup-symlinks.sh --worker to provision the worktree's data links; if set, this value
+# is exported as DROPBOX_PROJ to override the script's default. Leave UNSET normally — the
+# shipped scripts already default DROPBOX_PROJ to the host's ~/Dropbox/projects/... layout,
+# and the launcher must NOT guess it from raw_resolved (that doubled the project path and
+# silently created zero links — issue #25).
 
 # ── Confidentiality (READ before a live dispatch on a repo with confidential data) ──
 # The deny-hook blocks WRITES/DELETES under the raw prefixes below; it does NOT block

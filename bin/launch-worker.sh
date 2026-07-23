@@ -101,6 +101,7 @@ REPO="$(yml repo)"
 WORKING_CLONE="$(expand "$(yml working_clone)")"
 WORKTREES_DIR="$(expand "$(yml worktrees_dir)")"
 RAW_RESOLVED="$(expand "$(yml raw_resolved)")"
+DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 OUTPUT_PATHS="$(yml_list output_paths)"
 
 BRANCH="issue-$ISSUE"
@@ -190,30 +191,11 @@ if [ ! -d "$WORKTREE" ]; then
 fi
 
 # Worktree data bootstrap: the data dirs are machine-local (gitignored), so the
-# worker's fresh worktree starts without them. Two shapes:
-#   (a) repo ships its own setup-symlinks.sh — a code-only repo whose shared data
-#       lives in Dropbox under its own layout (e.g. distance-decay-est's
-#       `06 Raw_data` / `07 Dataclean`). Run it in the worktree so those symlinks
-#       exist; point it at the same tree as raw_resolved (its parent dir is the
-#       DROPBOX_PROJ root the script expects). The deny-hook still governs writes.
-#   (b) default template — one read-only data/raw symlink + a writable results dir.
-# CODE-ONLY EXCEPTION: a self-hosting/code-only manifest points raw_resolved at the
-# repo root itself (see projects/derailleur.yml) purely to hand the launcher a valid
-# --add-dir + blanket write-protection — there is NO distinct data tree. Detect that
-# by resolving both to real paths: when raw_resolved == working_clone, scaffolding a
-# self-referential `data/raw -> <repo>` symlink + empty data/results is spurious cruft
-# that (a) shouldn't exist on a code repo and (b) is untracked, so it blocks
-# worktree-prune --auto on merged worktrees. Skip it entirely in that case.
-RAW_REAL="$(cd "$RAW_RESOLVED" 2>/dev/null && pwd -P || echo "")"
-CLONE_REAL="$(cd "$WORKING_CLONE" 2>/dev/null && pwd -P || echo "")"
-if [ -x "$WORKTREE/setup-symlinks.sh" ]; then
-  ( cd "$WORKTREE" \
-    && DROPBOX_PROJ="${RAW_RESOLVED:+$(dirname "$RAW_RESOLVED")}" ./setup-symlinks.sh ) \
-    || echo "⚠ setup-symlinks.sh failed — worktree may be missing data symlinks" >&2
-elif [ -n "$RAW_RESOLVED" ] && [ "$RAW_REAL" != "$CLONE_REAL" ]; then
-  mkdir -p "$WORKTREE/data/results"
-  ln -sfn "$RAW_RESOLVED" "$WORKTREE/data/raw"
-fi
+# worker's fresh worktree starts without them. Shared with the checker via
+# bootstrap_worktree_data (dispatch-common.sh) so both provision identical links —
+# see that function for the full rationale (issue #25: the DROPBOX_PROJ derivation
+# that doubled california-pesticides' path segment, and the missing --worker flag).
+bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG"
 
 # Ledger: local execution state GitHub doesn't record. `pid` lets the digest
 # tell a live worker from a crashed one; `status` (dispatched/done/failed) is

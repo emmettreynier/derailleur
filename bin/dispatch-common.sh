@@ -173,6 +173,60 @@ report_mutation() {
   fi
 }
 
+# bootstrap_worktree_data <worktree> <raw_resolved> <working_clone> <dropbox_proj> <slug>
+# Provision a fresh worktree's machine-local (gitignored) data dirs BEFORE dispatch.
+# Sourced here (not duplicated in each launcher) so worker and checker bootstrap the
+# SAME way — the checker re-runs pipeline stages that read those same trees, so it needs
+# identical links. Two shapes:
+#   (a) repo ships its own setup-symlinks.sh — run it IN the worktree so its per-tree
+#       symlinks exist. ALWAYS in --worker mode: raw/+derived/ stay shared read-only,
+#       output/ becomes a private worktree-local dir, so neither a worker nor a checker
+#       ever races the main clone's outputs (the --worker contract the manifests specify).
+#       A repo whose script ignores --worker (e.g. distance-decay-est) treats it as a
+#       harmless no-op. We do NOT derive DROPBOX_PROJ from dirname(raw_resolved): that
+#       assumed raw_resolved's parent == the DROPBOX_PROJ root the script expects, a
+#       repo-layout-specific guess that DOUBLED the project path segment for
+#       california-pesticides (raw_resolved ends in .../<proj>/data) and silently created
+#       ZERO links (issue #25). The shipped scripts already default DROPBOX_PROJ to the
+#       host's Dropbox layout, so we leave it alone unless the manifest sets an explicit
+#       dropbox_proj. A SKIP/ERROR line means a link target was missing — surface it
+#       LOUDLY: the old `|| echo` guard never fired because setup-symlinks.sh exits 0 even
+#       when every link SKIPs, so an all-SKIP no-op looked like success.
+#   (b) default template — one read-only data/raw symlink + a writable results dir.
+# CODE-ONLY EXCEPTION: a self-hosting manifest points raw_resolved at the repo root
+# itself; when raw_resolved resolves to the same real path as working_clone there is NO
+# distinct data tree, so scaffolding a self-referential data/raw symlink is spurious
+# untracked cruft (it blocks worktree-prune --auto on merged worktrees) — skip it.
+bootstrap_worktree_data() {
+  local worktree="$1" raw_resolved="$2" working_clone="$3" dropbox_proj="$4" slug="$5"
+  local raw_real clone_real
+  raw_real="$(cd "$raw_resolved" 2>/dev/null && pwd -P || echo "")"
+  clone_real="$(cd "$working_clone" 2>/dev/null && pwd -P || echo "")"
+  if [ -x "$worktree/setup-symlinks.sh" ]; then
+    local ss_out ss_rc=0
+    # Separate declaration from assignment so the command-substitution exit status
+    # isn't masked by `local` (a bash gotcha); capture it into ss_rc via `|| `.
+    if [ -n "$dropbox_proj" ]; then
+      ss_out="$( cd "$worktree" && DROPBOX_PROJ="$dropbox_proj" ./setup-symlinks.sh --worker 2>&1 )" || ss_rc=$?
+    else
+      ss_out="$( cd "$worktree" && ./setup-symlinks.sh --worker 2>&1 )" || ss_rc=$?
+    fi
+    printf '%s\n' "$ss_out"
+    if [ "$ss_rc" -ne 0 ]; then
+      echo "⚠ setup-symlinks.sh exited $ss_rc — $slug worktree may be missing data symlinks." >&2
+    elif printf '%s\n' "$ss_out" | grep -qE '^[[:space:]]*(SKIP|ERROR)\b'; then
+      echo "⚠ setup-symlinks.sh could not create every link (SKIP/ERROR above) — the $slug" >&2
+      echo "  worktree is missing data symlinks; a stage that reads them will fail at run" >&2
+      echo "  time. Check dropbox_proj / raw_resolved in projects/$slug.yml (issue #25:" >&2
+      echo "  this used to fail silently — an all-SKIP run still exits 0)." >&2
+    fi
+  elif [ -n "$raw_resolved" ] && [ "$raw_real" != "$clone_real" ]; then
+    mkdir -p "$worktree/data/results"
+    ln -sfn "$raw_resolved" "$worktree/data/raw"
+  fi
+  return 0
+}
+
 # run_in_new_session <log> <ledger> <worktree> <kind> <mutation_baseline> -- <cmd...>
 # Run <cmd...> in its OWN session (new sid + process group, no controlling tty), so a
 # signal sent to the LAUNCHER's process group when the dispatching orchestrator session
