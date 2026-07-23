@@ -87,9 +87,49 @@ else
 fi
 
 # 2. Onboarded repos — only these are in the loop (they have a manifest) --------
-SLUGS=$(ls "$ORCH/projects/"*.yml 2>/dev/null | xargs -n1 basename 2>/dev/null \
-          | sed 's/\.yml$//' | paste -sd, - || true)
-[ -n "$SLUGS" ] || { echo "no onboarded projects (projects/*.yml) — nothing to do."; exit 0; }
+# A non-empty state/scheduled-repos allow-list (read via the shared scheduled_repos
+# helper in config-common.sh) further restricts AUTONOMOUS dispatch to the listed
+# slugs; absent/empty ⇒ all onboarded repos (today's behavior). Applied at BOTH the
+# SLUGS computation (worker brief) below and the checker loop (section 3) so the gate
+# covers every autonomous pass — whether fired by run-cycle.sh (cron) or run by hand.
+# Manual launch-*.sh and interactive /orchestrate are unaffected (they never read it).
+ALLOW="$(scheduled_repos)"   # newline-separated; empty ⇒ no allow-list in effect
+
+# is_scheduled <slug> — true when the allow-list is empty (all onboarded live) or the
+# slug is listed. A predicate: its exit status is the answer, so callers must use it in
+# a conditional (`if is_scheduled …`). Branches on ALLOW emptiness to avoid the bash 3.2
+# empty-array trap (CLAUDE.md); never expands ALLOW into an array.
+is_scheduled() {
+  [ -z "$ALLOW" ] && return 0
+  grep -qxF "$1" <<<"$ALLOW"
+}
+
+if [ -n "$ALLOW" ]; then
+  echo "— allow-list active (state/scheduled-repos): autonomous dispatch restricted to: $(echo "$ALLOW" | paste -sd' ' -)"
+  # A listed slug with no manifest can never dispatch — warn (never silently drop).
+  while IFS= read -r _s; do
+    [ -n "$_s" ] || continue
+    [ -f "$ORCH/projects/$_s.yml" ] \
+      || echo "  ⚠ scheduled-repos: '$_s' is not onboarded (no projects/$_s.yml) — ignored"
+  done <<< "$ALLOW"
+fi
+
+# Onboarded slugs (manifest present), then keep only those the allow-list permits.
+ONBOARDED=$(ls "$ORCH/projects/"*.yml 2>/dev/null | xargs -n1 basename 2>/dev/null \
+              | sed 's/\.yml$//' || true)
+SLUGS=""
+for _s in $ONBOARDED; do
+  is_scheduled "$_s" || continue
+  SLUGS="${SLUGS:+$SLUGS,}$_s"
+done
+if [ -z "$SLUGS" ]; then
+  if [ -z "$ONBOARDED" ]; then
+    echo "no onboarded projects (projects/*.yml) — nothing to do."
+  else
+    echo "allow-list (state/scheduled-repos) excludes every onboarded repo — nothing to dispatch."
+  fi
+  exit 0
+fi
 
 # 3. Dispatch checkers on ready, not-yet-approved PRs --------------------------
 # Deterministic: a PR marked ready (un-drafted) IS the "check me" signal — no LLM
@@ -99,6 +139,11 @@ echo "— checker pass —"
 for f in "$ORCH"/projects/*.yml; do
   [ -f "$f" ] || continue
   slug="$(basename "$f" .yml)"
+  # Same allow-list gate as the worker pass: skip checkers for repos the allow-list
+  # excludes (autonomous scope only — manual launch-checker.sh still works on them).
+  if ! is_scheduled "$slug"; then
+    echo "  $slug — excluded by allow-list (state/scheduled-repos), skip"; continue
+  fi
   repo="$(yml "$f" repo)"
   [ -n "$repo" ] || continue
   # ready, not-approved PRs that close an issue -> emit "<pr> <issue>" pairs.

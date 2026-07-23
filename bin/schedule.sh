@@ -12,9 +12,16 @@
 #   install     render the plist (stamping in the current repo path), bootstrap-load it,
 #               seed the wake chain. Idempotent; re-run after moving the repo.
 #   uninstall   bootout the agent, remove the rendered plist, cancel pmset wakes.
-#   status      agent loaded? current mode, next wake, usage-reset gate, cycle.log tail.
+#   status      agent loaded? current mode, next wake, usage-reset gate, cycle.log tail,
+#               + which onboarded repos are live vs scheduler-paused (the allow-list).
 #   live        flip mode to LIVE (scheduled cycles dispatch for real / spend).
 #   plan-only   flip mode to PLAN-ONLY (cycles run but spend nothing). [aliases: dry, plan]
+#   enable <slug>   add an onboarded repo to the autonomous-dispatch allow-list
+#                   (state/scheduled-repos). While the list is non-empty, ONLY listed
+#                   repos dispatch autonomously; empty/absent ⇒ all onboarded repos do.
+#   disable <slug>  remove a repo from the allow-list (emptying it restores all-live).
+#                   Both gate the AUTONOMOUS loop only — manual launch-*.sh and
+#                   interactive /orchestrate keep working on any onboarded repo.
 #   pause       stop the timer firing without uninstalling (e.g. while away). REFUSES
 #               if a worker/checker is still in-flight (bootout would SIGTERM the whole
 #               job tree, reaping them — issue #18); `pause --force` overrides and kills.
@@ -205,6 +212,47 @@ cmd_plan_only() {
   echo "mode -> PLAN-ONLY. Scheduled cycles will run but spend nothing (they only print what they would do)."
 }
 
+# --- per-repo autonomous-dispatch allow-list (state/scheduled-repos) ----------
+# enable/disable edit the allow-list read by config-common.sh:scheduled_repos, which
+# gates the AUTONOMOUS loop only (orchestrator-cycle.sh). Manual launch-*.sh and
+# interactive /orchestrate are never affected. Polarity is allow-list-when-set: a
+# non-empty file restricts autonomous dispatch to its slugs; empty/absent ⇒ all live.
+cmd_enable() {
+  local slug="${1:-}"
+  [ -n "$slug" ] || die "usage: $0 enable <slug>"
+  [ -f "$ORCH/projects/$slug.yml" ] \
+    || die "'$slug' is not onboarded (no projects/$slug.yml) — onboard it first (bin/new-project.sh) or check the slug."
+  mkdir -p "$(dirname "$SCHEDULED_REPOS_FILE")"
+  if scheduled_repos | grep -qxF "$slug"; then
+    echo "'$slug' is already in the autonomous-dispatch allow-list."
+    return 0
+  fi
+  echo "$slug" >> "$SCHEDULED_REPOS_FILE"
+  echo "enabled '$slug' for autonomous dispatch."
+  echo "note: an allow-list is now in effect — ONLY listed repos dispatch autonomously."
+  echo "      Others still work via manual launch-*.sh / interactive /orchestrate. See '$0 status'."
+}
+cmd_disable() {
+  local slug="${1:-}"
+  [ -n "$slug" ] || die "usage: $0 disable <slug>"
+  if [ ! -f "$SCHEDULED_REPOS_FILE" ] || ! grep -qxF "$slug" "$SCHEDULED_REPOS_FILE"; then
+    echo "'$slug' is not in the allow-list; nothing to do."
+    return 0
+  fi
+  # Drop the exact slug line, keep the rest. grep -vxF exits 1 when nothing remains;
+  # there's no `set -e` here, and `|| true` keeps it explicit.
+  local tmp="$SCHEDULED_REPOS_FILE.tmp"
+  grep -vxF "$slug" "$SCHEDULED_REPOS_FILE" > "$tmp" || true
+  mv "$tmp" "$SCHEDULED_REPOS_FILE"
+  # Empty file == absent == all-live: remove it so the "no allow-list" path is taken.
+  if scheduled_repos | grep -q .; then
+    echo "disabled '$slug' — removed from the autonomous-dispatch allow-list."
+  else
+    rm -f "$SCHEDULED_REPOS_FILE"
+    echo "disabled '$slug' — allow-list now empty; ALL onboarded repos dispatch autonomously again."
+  fi
+}
+
 # --- pause / resume (stop firing entirely, e.g. while away) -------------------
 # Lighter than uninstall: leaves the symlink + pmset wakes in place so 'resume' is
 # instant and sudo-free. The Mac may still wake at slot times and find nothing to run
@@ -275,6 +323,30 @@ cmd_status() {
   fi
   echo "== pmset scheduled wakes =="
   pmset -g sched 2>/dev/null | sed 's/^/  /' || echo "  (pmset unavailable)"
+  echo "== per-repo autonomous dispatch (allow-list) =="
+  local onboarded allow s
+  onboarded="$(ls "$ORCH/projects/"*.yml 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.yml$//' || true)"
+  allow="$(scheduled_repos)"
+  if [ -z "$onboarded" ]; then
+    echo "  (no onboarded repos)"
+  elif [ -z "$allow" ]; then
+    echo "  no allow-list in effect — ALL onboarded repos dispatch autonomously:"
+    for s in $onboarded; do echo "    • $s  (live)"; done
+  else
+    echo "  allow-list ACTIVE ($SCHEDULED_REPOS_FILE) — only listed repos dispatch autonomously:"
+    for s in $onboarded; do
+      if grep -qxF "$s" <<<"$allow"; then
+        echo "    • $s  (live)"
+      else
+        echo "    • $s  (excluded — scheduler-paused; manual/interactive dispatch still works)"
+      fi
+    done
+    # Warn about allow-list entries with no manifest (they never dispatch).
+    while IFS= read -r s; do
+      [ -n "$s" ] || continue
+      [ -f "$ORCH/projects/$s.yml" ] || echo "    ⚠ $s  (in allow-list but NOT onboarded — ignored)"
+    done <<< "$allow"
+  fi
   echo "== usage-limit gate =="
   if [ -s "$ORCH/state/usage-reset" ]; then
     local e; e="$(cut -d' ' -f1 "$ORCH/state/usage-reset")"
@@ -310,8 +382,10 @@ case "${1:-}" in
   run)        shift; cmd_run "$@" ;;
   live)       cmd_live ;;
   plan-only|dry|plan) cmd_plan_only ;;
+  enable)     shift; cmd_enable "$@" ;;
+  disable)    shift; cmd_disable "$@" ;;
   pause)      shift; cmd_pause "$@" ;;
   resume)     cmd_resume ;;
   arm-wake)   cmd_arm_wake ;;
-  *) echo "usage: $0 {install|uninstall|status|run [--dry-run]|live|plan-only|pause [--force]|resume}" >&2; exit 2 ;;
+  *) echo "usage: $0 {install|uninstall|status|run [--dry-run]|live|plan-only|enable <slug>|disable <slug>|pause [--force]|resume}" >&2; exit 2 ;;
 esac

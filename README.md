@@ -128,6 +128,13 @@ A few steps are irreducibly manual (not CLI-scriptable): GitHub board view
 membership/filters, Dropbox "Available offline" pinning, `gh`/Dropbox
 authentication, and coauthor buy-in for shared-repo branch protection.
 
+> **If you run a per-repo autonomous allow-list** (`schedule.sh enable/disable`,
+> below), a newly onboarded repo is **excluded from the automated loop until you
+> `./bin/schedule.sh enable <slug>`** — the allow-list is opt-in per repo, so
+> onboarding alone doesn't put a repo on the cron budget. (With no allow-list set —
+> the default — onboarding is enough; every onboarded repo dispatches autonomously.)
+> Manual `launch-worker.sh <slug> <issue#>` works immediately either way.
+
 ### Enable the scheduled loop (optional)
 
 Once you trust a project's setup, you can let the orchestrator run itself on a
@@ -249,9 +256,11 @@ worktree idempotently and run detached by default:
 ### Day-to-day scheduler commands
 
 ```bash
-./bin/schedule.sh status        # timer state, current mode, next wake, usage gate, recent log
+./bin/schedule.sh status        # timer state, mode, next wake, usage gate, per-repo allow-list, recent log
 ./bin/schedule.sh live          # let scheduled runs dispatch for real (spend)
 ./bin/schedule.sh plan-only     # back to no-spend (mechanically: cycles cannot dispatch for real)
+./bin/schedule.sh enable <slug> # add an onboarded repo to the autonomous-dispatch allow-list
+./bin/schedule.sh disable <slug># remove a repo from the allow-list (emptying it restores all-live)
 ./bin/schedule.sh run           # run one cycle right now (respects the current mode)
 ./bin/schedule.sh run --dry-run # run one cycle right now in plan-only mode (free)
 ./bin/schedule.sh pause         # stop firing entirely (e.g. while away); refuses if a worker is in-flight
@@ -259,6 +268,25 @@ worktree idempotently and run detached by default:
 ./bin/schedule.sh resume        # start firing again after a pause
 ./bin/schedule.sh uninstall     # remove completely (unregister timer, cancel wakes)
 ```
+
+Same via the `dr` CLI from anywhere, e.g. `dr schedule enable solar-income` /
+`dr schedule disable solar-income` / `dr schedule status`.
+
+**Per-repo allow-list (which onboarded repos the *autonomous* loop may spend on).**
+By default every onboarded repo is autonomously dispatchable. `enable`/`disable`
+maintain a machine-local allow-list (`state/scheduled-repos`, one slug per line,
+gitignored like `state/mode`) that scopes the **automated loop only**:
+
+- **Empty / absent ⇒ all onboarded repos dispatch autonomously** (the default, and
+  today's behavior). The first `enable` creates the list and flips the polarity.
+- **Non-empty ⇒ only the listed slugs dispatch autonomously.** Every other onboarded
+  repo is *scheduler-paused*: `orchestrator-cycle.sh` (cron- or hand-triggered) skips
+  it, and `board-digest.sh` marks it `⏸ scheduler-paused`.
+- **Manual and interactive dispatch are never gated by it** — `launch-worker.sh` /
+  `launch-checker.sh <slug> <n>` and `/orchestrate` still work on any onboarded repo,
+  allow-list or not. It only decides where the *unattended* loop spends.
+- `enable` refuses a slug with no `projects/<slug>.yml` (naming it); an allow-list
+  entry that later loses its manifest is ignored with a warning, never dispatched.
 
 ### How to read the results
 
