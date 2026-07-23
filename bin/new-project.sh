@@ -123,5 +123,5 @@ Before the first real dispatch:
   1. Edit $MANIFEST — set 'project', 'raw_resolved', and confirm paths (TODOs above).
   2. Add the repo to the board + "Needs Me" view (GitHub Projects UI — manual).
   3. dropbox-native only: pin the raw data "Available offline" in Dropbox.
-  4. Dry-run a worker:  ./bin/launch-worker.sh $SLUG <issue#> --dry-run
+  4. Dry-run a worker:  dr launch-worker $SLUG <issue#> --dry-run
 EOF

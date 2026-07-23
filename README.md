@@ -182,8 +182,8 @@ dr worktree-prune --auto
 dr help                                        # list every available command
 ```
 
-The examples below show the `./bin/<script>.sh` form (which always works from the repo
-root); read `dr <command>` as the equivalent shortcut from anywhere. Two caveats: the
+The examples below use the `dr <command>` form; the equivalent `./bin/<script>.sh`
+invocation (run from the repo root) does exactly the same thing. Two caveats: the
 symlink lives in `~/.local/bin`, which must be on your PATH (install warns, with the
 exact `~/.zshrc` line, if it isn't); and because the symlink points back into this
 checkout, **re-run `./bin/install.sh` if you move the repo** — same as `/orchestrate`.
@@ -204,16 +204,16 @@ autonomously, and it never merges. Its tools are scoped to the board digest, the
 launchers, read-only `gh`, and the `Monitor` tool (so it can watch the workers/checkers
 it dispatched to completion without blocking your session). For a session booted from
 this checkout with the digest pre-injected (same posture), use
-`./bin/launch-orchestrator.sh` instead.
+`dr launch-orchestrator` instead.
 
 ### Run one orchestration pass by hand
 
 ```bash
-./bin/orchestrator-cycle.sh              # real pass: prune -> dispatch checkers -> dispatch workers
-./bin/orchestrator-cycle.sh --dry-run    # plan only — nothing dispatched, nothing spent
+dr orchestrator-cycle              # real pass: prune -> dispatch checkers -> dispatch workers
+dr orchestrator-cycle --dry-run    # plan only — nothing dispatched, nothing spent
 ```
 
-Tunable by env var, e.g. `WORKER_BUDGET=6 ./bin/orchestrator-cycle.sh`:
+Tunable by env var, e.g. `WORKER_BUDGET=6 dr orchestrator-cycle`:
 
 | Var | Default | What it does |
 |---|---|---|
@@ -229,7 +229,7 @@ To preview the board digest the orchestrator boots with — deterministic, free,
 dispatches nothing:
 
 ```bash
-./bin/launch-orchestrator.sh --dry-run   # prints the board digest (the orchestrator's whole view)
+dr launch-orchestrator --dry-run   # prints the board digest (the orchestrator's whole view)
 ```
 
 ### Dispatch one role directly
@@ -238,40 +238,40 @@ Bypasses the cycle's intake gate — use when you've already decided. Both reuse
 worktree idempotently and run detached by default:
 
 ```bash
-./bin/launch-worker.sh  <repo-slug> <issue#> [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
-./bin/launch-checker.sh <repo-slug> <pr#>    [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
+dr launch-worker  <repo-slug> <issue#> [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
+dr launch-checker <repo-slug> <pr#>    [--dry-run] [--foreground] [--budget USD] [--fallback MODEL]
 
 # e.g. land a resume issue with extra headroom, watched live:
-./bin/launch-worker.sh solar-income 1 --budget 5 --foreground
+dr launch-worker solar-income 1 --budget 5 --foreground
 ```
 
 ### Reclaim worktree disk
 
 ```bash
-./bin/worktree-prune.sh                  # interactive: list every worktree (disk + status), pick which to remove
-./bin/worktree-prune.sh --auto           # non-interactive: remove merged+clean worktrees, report the rest
-./bin/worktree-prune.sh --auto --dry-run # report only, remove nothing
-./bin/worktree-prune.sh --auto --force   # also drop worktrees blocked solely by stray untracked files
+dr worktree-prune                  # interactive: list every worktree (disk + status), pick which to remove
+dr worktree-prune --auto           # non-interactive: remove merged+clean worktrees, report the rest
+dr worktree-prune --auto --dry-run # report only, remove nothing
+dr worktree-prune --auto --force   # also drop worktrees blocked solely by stray untracked files
 ```
 
 ### Day-to-day scheduler commands
 
 ```bash
-./bin/schedule.sh status        # timer state, mode, next wake, usage gate, per-repo allow-list, recent log
-./bin/schedule.sh live          # let scheduled runs dispatch for real (spend)
-./bin/schedule.sh plan-only     # back to no-spend (mechanically: cycles cannot dispatch for real)
-./bin/schedule.sh enable <slug> # add an onboarded repo to the autonomous-dispatch allow-list
-./bin/schedule.sh disable <slug># remove a repo from the allow-list (emptying it restores all-live)
-./bin/schedule.sh run           # run one cycle right now (respects the current mode)
-./bin/schedule.sh run --dry-run # run one cycle right now in plan-only mode (free)
-./bin/schedule.sh pause         # stop firing entirely (e.g. while away); refuses if a worker is in-flight
-./bin/schedule.sh pause --force # pause even with live workers (bootout SIGTERMs them — loses their work)
-./bin/schedule.sh resume        # start firing again after a pause
-./bin/schedule.sh uninstall     # remove completely (unregister timer, cancel wakes)
+dr schedule status        # timer state, mode, next wake, usage gate, per-repo allow-list, recent log
+dr schedule live          # let scheduled runs dispatch for real (spend)
+dr schedule plan-only     # back to no-spend (mechanically: cycles cannot dispatch for real)
+dr schedule enable <slug> # add an onboarded repo to the autonomous-dispatch allow-list
+dr schedule disable <slug># remove a repo from the allow-list (emptying it restores all-live)
+dr schedule run           # run one cycle right now (respects the current mode)
+dr schedule run --dry-run # run one cycle right now in plan-only mode (free)
+dr schedule pause         # stop firing entirely (e.g. while away); refuses if a worker is in-flight
+dr schedule pause --force # pause even with live workers (bootout SIGTERMs them — loses their work)
+dr schedule resume        # start firing again after a pause
+dr schedule uninstall     # remove completely (unregister timer, cancel wakes)
 ```
 
-Same via the `dr` CLI from anywhere, e.g. `dr schedule enable solar-income` /
-`dr schedule disable solar-income` / `dr schedule status`.
+`dr schedule <cmd>` works from any directory; `./bin/schedule.sh <cmd>` from the repo
+root does the same thing.
 
 **Per-repo allow-list (which onboarded repos the *autonomous* loop may spend on).**
 By default every onboarded repo is autonomously dispatchable. `enable`/`disable`
@@ -283,8 +283,8 @@ gitignored like `state/mode`) that scopes the **automated loop only**:
 - **Non-empty ⇒ only the listed slugs dispatch autonomously.** Every other onboarded
   repo is *scheduler-paused*: `orchestrator-cycle.sh` (cron- or hand-triggered) skips
   it, and `board-digest.sh` marks it `⏸ scheduler-paused`.
-- **Manual and interactive dispatch are never gated by it** — `launch-worker.sh` /
-  `launch-checker.sh <slug> <n>` and `/orchestrate` still work on any onboarded repo,
+- **Manual and interactive dispatch are never gated by it** — `dr launch-worker` /
+  `dr launch-checker <slug> <n>` and `/orchestrate` still work on any onboarded repo,
   allow-list or not. It only decides where the *unattended* loop spends.
 - `enable` refuses a slug with no `projects/<slug>.yml` (naming it); an allow-list
   entry that later loses its manifest is ignored with a warning, never dispatched.
