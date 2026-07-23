@@ -9,9 +9,11 @@
 # guard or scaffold step stays invisible to the maintainer (whose conf is already
 # filled) and only surfaces as a confusing day-one failure for someone else.
 #
-# This script verifies the guard's three states against THROWAWAY temp confs and
-# proves a filled config renders into a brief — deterministically and offline. Any
-# step that needs the network / `gh` auth prints a `SKIP:` line instead of failing.
+# This script verifies the guard's three states against THROWAWAY temp confs,
+# proves a filled config renders into a brief, and checks the derailleur/dr CLI
+# dispatcher routes correctly (including through a symlink, the way install.sh links
+# it onto PATH) — all deterministically and offline. Any step that needs the network
+# / `gh` auth prints a `SKIP:` line instead of failing.
 #
 # It NEVER creates, fills, or touches a real orchestrator.conf: every conf it reads
 # lives in a mktemp dir that is removed on exit, and it asserts a pre-existing real
@@ -130,6 +132,73 @@ printf '%s' "$render_out" | grep -qF '{{OPERATOR_NAME}}' && fail \
   "the checker brief still has an unrendered {{OPERATOR_NAME}} token after render." \
   "Token substitution in the brief renderer is not replacing OPERATOR_NAME."
 pass "filled conf → exit 0, all 5 vars exported, {{OPERATOR_NAME}} rendered into the brief"
+
+# --- (d) the derailleur / dr CLI dispatcher -----------------------------------
+# bin/derailleur (linked onto PATH as derailleur/dr by install.sh) fronts every
+# bin/<cmd>.sh. Its one subtle part is the symlink-resolution walk that lets it find
+# THIS repo's root when invoked through the ~/.local/bin symlink from any cwd — code
+# that looks fine run directly from the repo but silently breaks via the installed
+# link. These checks are deterministic and offline: `help` reads no external state,
+# and the symlink path is exercised with a throwaway link in $TMPROOT (never a real
+# ~/.local/bin write). No subcommand is dispatched, so nothing is spent.
+DERAILLEUR="$ORCH/bin/derailleur"
+[ -x "$DERAILLEUR" ] || fail \
+  "bin/derailleur is missing or not executable." \
+  "install.sh marks it +x; confirm the file exists and re-run ./bin/install.sh."
+
+# help / no-arg / -h / --help all exit 0
+for arg in NOARG help -h --help; do
+  rc=0
+  if [ "$arg" = NOARG ]; then
+    out="$("$DERAILLEUR" 2>&1)" || rc=$?
+  else
+    out="$("$DERAILLEUR" "$arg" 2>&1)" || rc=$?
+  fi
+  [ "$rc" -eq 0 ] || fail \
+    "derailleur usage path (arg='${arg#NOARG}') did not exit 0 (got $rc)." \
+    "The dispatcher's help/usage path is broken — see bin/derailleur."
+done
+pass "dispatcher: no-arg / help / -h / --help all exit 0"
+
+# the command list names real commands and excludes the sourced libs + itself
+dr_cmds="$("$DERAILLEUR" help 2>/dev/null | grep -E '^  [a-z][a-z-]*$' || true)"
+printf '%s\n' "$dr_cmds" | grep -qx '  launch-worker' || fail \
+  "dispatcher help does not list a known command (launch-worker)." \
+  "bin/derailleur builds its list from bin/*.sh — the glob or listing is broken."
+for lib in dispatch-common config-common derailleur; do
+  printf '%s\n' "$dr_cmds" | grep -qx "  $lib" && fail \
+    "dispatcher help lists '$lib', which must be excluded (sourced lib, or itself)." \
+    "bin/derailleur must skip dispatch-common/config-common and never list itself."
+done
+pass "dispatcher: help lists real commands, excludes sourced libs + itself"
+
+# unknown subcommand and a sourced-lib name both exit 2 with a helpful message
+rc=0; out="$("$DERAILLEUR" definitely-not-a-cmd 2>&1)" || rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'unknown command'; } || fail \
+  "unknown subcommand did not exit 2 with an 'unknown command' message (exit $rc)." \
+  "bin/derailleur should reject unknown commands with usage + exit 2."
+rc=0; out="$("$DERAILLEUR" config-common 2>&1)" || rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'sourced library'; } || fail \
+  "invoking a sourced lib (config-common) did not exit 2 as a non-command (exit $rc)." \
+  "bin/derailleur must refuse to dispatch dispatch-common/config-common."
+pass "dispatcher: unknown cmd + sourced-lib name each exit 2 with guidance"
+
+# THE subtle one: invoked THROUGH a symlink from a foreign cwd, it must still resolve
+# this repo's bin/ (path-free) and yield the identical command list — proving the
+# symlink-resolution walk lands on the real repo root, not the link's own directory.
+ln -s "$DERAILLEUR" "$TMPROOT/dr"
+rc=0; sym_help="$(cd "$TMPROOT" && ./dr help 2>&1)" || rc=$?
+[ "$rc" -eq 0 ] || fail \
+  "the dispatcher failed when invoked through a symlink from another directory (exit $rc)." \
+  "The symlink-resolution walk in bin/derailleur can't find the repo root via the installed link."
+printf '%s' "$sym_help" | grep -qF "$ORCH/bin/" || fail \
+  "symlinked dispatcher did not resolve back to $ORCH/bin (repo-root resolution failed)." \
+  "bin/derailleur's while-symlink loop must resolve the link to this checkout."
+sym_cmds="$(cd "$TMPROOT" && ./dr help 2>/dev/null | grep -E '^  [a-z][a-z-]*$' || true)"
+[ "$sym_cmds" = "$dr_cmds" ] || fail \
+  "command list differs between direct and symlinked invocation (resolution mismatch)." \
+  "The dispatcher must behave identically via the ~/.local/bin symlink and a direct call."
+pass "dispatcher: resolves this repo's bin/ through a symlink from a foreign cwd (identical command list)"
 
 # --- real conf, if present: validate the operator's ACTUAL identity (offline) --
 # Deterministic and read-only — sourcing only reads the file. This is what proves

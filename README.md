@@ -77,7 +77,10 @@ regression is caught here, not on a labmate's first real run.
 **What it checks** (against throwaway temp confs — it never touches your real one):
 a missing conf aborts; a conf with a blank field aborts *and names the field*; a
 fully-filled conf exits 0, exports all five vars, and renders `{{OPERATOR_NAME}}`
-into a brief the way the launchers do. If a real `orchestrator.conf` is present it
+into a brief the way the launchers do. It also exercises the `derailleur`/`dr` CLI
+dispatcher — `help`/unknown-command/sourced-lib routing, and (the subtle part)
+that it resolves back to this checkout when invoked through a symlink, the way
+`install.sh` links it onto PATH. If a real `orchestrator.conf` is present it
 also confirms *your* conf passes the guard, and — when `gh` is authenticated —
 that `launch-orchestrator.sh --dry-run` renders your board digest. It asserts your
 real conf is byte-identical before and after.
