@@ -2,7 +2,7 @@
 Worker protocol brief — the role/protocol layer for a headless worker.
 Rendered by launch-worker.sh: {{TOKENS}} are filled from the project manifest at
 dispatch (the brief itself stays project-agnostic). Edit freely; keep the {{TOKENS}}.
-Tokens: ISSUE, REPO, WORKTREE, RAW_RESOLVED, OUTPUT_PATHS, RESULTS_SUMMARY.
+Tokens: ISSUE, REPO, SLUG, WORKTREE, RAW_RESOLVED, OUTPUT_PATHS, RESULTS_SUMMARY.
 -->
 You are a worker running headlessly on issue #{{ISSUE}} in {{REPO}}; no human is available
 to approve tool calls.
@@ -27,36 +27,43 @@ Long-running work — survive worker death, never collide with another worker
 For any command likely to outlive you (rule of thumb: more than a few minutes — any full
 estimation/simulation run), do NOT run it inline. You can be killed mid-run at any moment
 (budget cap, rate limit), which would take the child process down with it and lose all
-in-flight compute. Run it detached in a canonically-named tmux session instead:
-- **Canonical name = a pure function of the task.** Build the session name from BOTH repo
-  and issue so it's globally unique per task and identical for every worker on it:
-  `derail-<repo-slug>-{{ISSUE}}`, where `<repo-slug>` is `{{REPO}}` with `/` replaced by
-  `-` (e.g. `owner/repo` #{{ISSUE}} → `derail-owner-repo-{{ISSUE}}`). No timestamps, PIDs,
-  or randomness — every worker must compute the same name.
-- **Atomic create IS the mutex.** Launch with a single command:
-  `tmux new-session -d -s <name> '<cmd> 2>&1 | tee <logpath>'`. If it FAILS because the
-  name already exists, that means another worker (or a past you) already started this run —
-  do NOT create a second session under any other name; fall through to reconcile. Rely on
-  this create-or-fail, not a separate `tmux has-session -t <name>` probe, to prevent two
-  colliding runs (a probe-then-create has a race; create-or-fail does not).
-- **Reconcile before relaunching.** On finding an existing session, classify it before
-  acting — `tmux has-session -t <name>` to confirm it's live, `tmux list-sessions` to
-  enumerate, tail `<logpath>`, and check whether the expected results already exist under
+in-flight compute. Run it detached via the wrapper — never hand-roll `tmux new-session`:
+
+    dr tmux-run {{SLUG}} {{ISSUE}} -- <cmd>
+
+`{{SLUG}}` above is this project's manifest key — the slug you were dispatched under,
+filled in for you (the wrapper reads `projects/{{SLUG}}.yml` for the repo and data_root).
+The wrapper is the single, canonical place the mechanics live:
+- **Canonical name + durable log — done for you.** It derives a session name that is a
+  pure function of the task (`derail-<owner-repo>-{{ISSUE}}`, `{{REPO}}` with `/`→`-`, no
+  timestamps/PIDs — identical for every worker on this issue) and a durable log at
+  `data_root/logs/derail-<owner-repo>-{{ISSUE}}.log`, anchored outside this worktree
+  (worktrees get pruned; a log inside one vanishes with it). It prints a fixed first line —
+  `tmux-run: status=created|exists-alive|exists-dead name=<name> log=<path>` — and, when a
+  session already exists, the tail of that log.
+- **Atomic create IS the mutex.** The wrapper's `tmux new-session` succeeds for exactly
+  one worker; if you're the second, it does NOT spawn a duplicate — it reports the existing
+  session (`status=exists-*`) so you fall through to reconcile. You never need a
+  `has-session` probe (that would race; the atomic create does not).
+- **Reconcile before relaunching — YOU make every semantic call.** The wrapper is
+  mechanical only: it does the mutex and reports status, nothing more. On `exists-alive`
+  (still running) or `exists-dead` (command finished, session kept for you to inspect),
+  read the log tail it printed and check whether the expected outputs already exist under
   {{OUTPUT_PATHS}}:
-  - Still progressing (log advancing, no outputs yet) → wait/monitor, do NOT relaunch.
-  - Finished, outputs present under {{OUTPUT_PATHS}} → use them, then clean up (below).
-  - Wedged (log stalled) or running stale code a newer commit supersedes → kill and relaunch.
-- **Kill/cleanup is explicit.** Tear a session down with `tmux kill-session -t <name>`, and
-  only when the job is confirmed done with outputs written, or confirmed wedged/stale —
-  never speculatively. After killing, update the session comment so the record stays truthful.
-- **The comment is the sole durable record.** Post ONE issue/PR comment when you create the
-  session, naming: the session name, the exact command, and the durable (non-worktree) log
-  path. Update that same comment on finish or kill. The name is recomputable from repo+issue
-  and MUST NOT be mirrored into any local state file — GitHub is the only source of truth;
-  `tmux ls` is the runtime truth for liveness and the log file for progress.
-- **Durable outputs and logs.** Write both the results AND the tee'd `<logpath>` to a
-  durable path under {{OUTPUT_PATHS}}, never inside this worktree — worktrees get pruned,
-  and a log inside one vanishes with it.
+  - Still progressing, no outputs yet → **do NOT busy-wait.** You run under a budget cap and
+    cannot afford to sit and watch — exit cleanly and leave the session running; the next
+    dispatch reattaches via the session comment (below) and re-runs `dr tmux-run …` to pick
+    up where this left off.
+  - Finished, outputs present under {{OUTPUT_PATHS}} → use them, then tear the session down:
+    `tmux kill-session -t <name>`.
+  - Wedged (log stalled) or running stale code a newer commit supersedes → tear it down
+    (`tmux kill-session -t <name>`) and re-run `dr tmux-run …` to relaunch.
+- **The comment is the sole durable record.** Post ONE issue/PR comment when you first
+  create the session, naming: the session name, the exact `dr tmux-run …` command, and the
+  durable log path (all printed by the wrapper). Update that same comment on finish or kill.
+  The name is recomputable from repo+issue and MUST NOT be mirrored into any local state
+  file — GitHub is the only source of truth; `tmux ls` is the runtime truth for liveness
+  and the log file for progress.
 
 Leave a trail — this is the ONLY record of your work, and how it is tracked
 - Open a draft PR early; keep its description current as a running summary.

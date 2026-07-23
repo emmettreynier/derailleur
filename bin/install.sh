@@ -40,9 +40,10 @@ die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 # --- deps ---------------------------------------------------------------------
 # Hard deps: the loop cannot run without these. python3 + git ship with the Xcode
-# CLT (pulled in by Homebrew); gh/jq/claude are explicit installs.
+# CLT (pulled in by Homebrew); gh/jq/claude/tmux are explicit installs. tmux backs
+# bin/tmux-run.sh (a worker's detached long-running jobs — see briefs/worker-brief.md).
 missing=0
-for dep in gh jq claude python3 git; do
+for dep in gh jq claude python3 git tmux; do
   if command -v "$dep" >/dev/null 2>&1; then
     note "✓ $dep  ($(command -v "$dep"))"
   else
@@ -50,7 +51,7 @@ for dep in gh jq claude python3 git; do
     missing=1
   fi
 done
-[ "$missing" -eq 0 ] || die "install missing deps and re-run (gh, jq, git via Homebrew; claude via npm), then 'gh auth login'."
+[ "$missing" -eq 0 ] || die "install missing deps and re-run (gh, jq, git, tmux via Homebrew; claude via npm), then 'gh auth login'."
 
 # gh must be authenticated or every dispatch fails at the first API call.
 if gh auth status >/dev/null 2>&1; then

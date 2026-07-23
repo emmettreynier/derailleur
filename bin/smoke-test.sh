@@ -256,6 +256,97 @@ rc=0; "$WROOT/bin/watch-dispatch.sh" >/dev/null 2>&1 || rc=$?
   "The script must require at least one item to watch."
 pass "watch-dispatch: malformed item + no-args each exit 2"
 
+# --- (f) tmux-run.sh: name/log derivation + the atomic-create mutex -----------
+# tmux-run.sh is the worker's detached long-running-job wrapper (issue #22): it derives
+# a canonical session name + durable log from a project manifest and does an atomic
+# `tmux new-session` that doubles as a cross-worker mutex. Test it in a SANDBOX ORCH
+# (copy the script into $TRROOT/bin so its `cd dirname/..` root resolution lands in the
+# sandbox, seed a throwaway manifest + temp data_root) so it touches no real project.
+# The dry-run half is deterministic + offline; the live mutex half needs tmux and SKIPs
+# cleanly when it's absent (mirrors the offline contract). Nothing is spent.
+TMUXRUN="$ORCH/bin/tmux-run.sh"
+[ -x "$TMUXRUN" ] || fail \
+  "bin/tmux-run.sh is missing or not executable." \
+  "install.sh's bin/*.sh chmod covers it; confirm the file exists and re-run ./bin/install.sh."
+
+TRROOT="$TMPROOT/tmuxrun"; mkdir -p "$TRROOT/bin" "$TRROOT/projects"
+cp "$TMUXRUN" "$TRROOT/bin/tmux-run.sh"
+TR_DATA="$TRROOT/data"
+TR_NAME="derail-owner-demo-repo-7"   # derived from repo owner/demo-repo + issue 7
+cat >"$TRROOT/projects/zz-smoke.yml" <<YML
+repo: owner/demo-repo
+data_root: $TR_DATA
+YML
+
+# dry-run: derives derail-owner-demo-repo-7 + a log under <data_root>/logs, creates nothing.
+rc=0; dr_out="$("$TRROOT/bin/tmux-run.sh" zz-smoke 7 --dry-run 2>&1)" || rc=$?
+[ "$rc" -eq 0 ] || fail \
+  "tmux-run.sh --dry-run exited nonzero ($rc): $(printf '%s' "$dr_out" | tail -1)" \
+  "The wrapper should derive the name/log and exit 0 in --dry-run; see bin/tmux-run.sh."
+printf '%s' "$dr_out" | grep -qF "$TR_NAME" || fail \
+  "tmux-run --dry-run did not derive the canonical name $TR_NAME." \
+  "Name derivation (repo with /->-, + issue) is broken in bin/tmux-run.sh."
+printf '%s' "$dr_out" | grep -qF "$TR_DATA/logs/$TR_NAME.log" || fail \
+  "tmux-run --dry-run did not compute the durable log under <data_root>/logs." \
+  "Log-path derivation is broken in bin/tmux-run.sh."
+[ ! -d "$TR_DATA/logs" ] || fail \
+  "tmux-run --dry-run created the log dir (it must create nothing)." \
+  "The --dry-run branch must precede any mkdir in bin/tmux-run.sh."
+pass "tmux-run: --dry-run derives canonical name + <data_root>/logs path, creates nothing"
+
+# --tail flag (issue #22 follow-up): overrides the log-tail length; validated as an
+# integer. Both checks are dry-run only (offline, no tmux, nothing spent).
+rc=0; "$TRROOT/bin/tmux-run.sh" zz-smoke 7 --tail 5 --dry-run >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || fail \
+  "tmux-run --tail 5 --dry-run exited nonzero ($rc)." \
+  "The --tail N flag must be parsed before '--'; see the arg loop in bin/tmux-run.sh."
+rc=0; "$TRROOT/bin/tmux-run.sh" zz-smoke 7 --tail bogus --dry-run >/dev/null 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail \
+  "tmux-run --tail bogus was accepted (must reject a non-integer)." \
+  "The --tail validation (case '*[!0-9]*') is missing/broken in bin/tmux-run.sh."
+pass "tmux-run: --tail N accepts an integer and rejects a non-integer"
+
+# {{SLUG}} token wiring (issue #22 follow-up): the brief must invoke the wrapper with the
+# rendered {{SLUG}} token, and launch-worker.sh must supply BRIEF_SLUG for it — a static
+# both-ends check so the token can't be present in one file and unwired in the other.
+grep -qF 'dr tmux-run {{SLUG}}' "$ORCH/briefs/worker-brief.md" || fail \
+  "worker-brief.md does not invoke 'dr tmux-run {{SLUG}}'." \
+  "The brief should render the slug token, not describe '<repo-slug>' — see briefs/worker-brief.md."
+grep -q 'BRIEF_SLUG=' "$ORCH/bin/launch-worker.sh" || fail \
+  "launch-worker.sh does not set BRIEF_SLUG for the brief render." \
+  "Add BRIEF_SLUG=\"\$REPO_SLUG\" to the render_brief invocation in bin/launch-worker.sh."
+pass "tmux-run: {{SLUG}} token wired end-to-end (brief invokes it, launcher supplies it)"
+
+# live mutex walk — needs tmux; SKIP cleanly (never fail) when it's unavailable.
+if ! command -v tmux >/dev/null 2>&1; then
+  skip "tmux not installed — skipping tmux-run live mutex case"
+else
+  tmux kill-session -t "$TR_NAME" 2>/dev/null || true   # clean slate (a prior abort could leave it)
+  # the command emits output immediately (echo) so the tee'd log is non-empty at once
+  # first call → created
+  rc=0; a_out="$("$TRROOT/bin/tmux-run.sh" zz-smoke 7 -- sh -c 'echo started; sleep 60' 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ] || ! printf '%s' "$a_out" | grep -q 'status=created'; then
+    tmux kill-session -t "$TR_NAME" 2>/dev/null || true
+    fail "tmux-run first call did not report status=created (exit $rc): $(printf '%s' "$a_out" | head -1)" \
+         "Atomic create path is broken in bin/tmux-run.sh."
+  fi
+  # second identical call → exists-alive + log tail; must NOT spawn a duplicate
+  rc=0; b_out="$("$TRROOT/bin/tmux-run.sh" zz-smoke 7 -- sh -c 'echo started; sleep 60' 2>&1)" || rc=$?
+  dup="$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -cx "$TR_NAME" || true)"
+  logsz=0; [ -s "$TR_DATA/logs/$TR_NAME.log" ] && logsz=1
+  tmux kill-session -t "$TR_NAME" 2>/dev/null || true   # teardown before asserting so nothing leaks
+  { [ "$rc" -eq 0 ] && printf '%s' "$b_out" | grep -q 'status=exists-alive'; } || fail \
+    "tmux-run second call did not report status=exists-alive (exit $rc): $(printf '%s' "$b_out" | head -1)" \
+    "The mutex/reconcile classification is broken in bin/tmux-run.sh."
+  [ "$dup" = 1 ] || fail \
+    "tmux-run spawned a duplicate session (found $dup named $TR_NAME; the atomic-create mutex is broken)." \
+    "A colliding create must report the existing session, never create a second — see bin/tmux-run.sh."
+  [ "$logsz" = 1 ] || fail \
+    "tmux-run did not write a non-empty durable log at $TR_DATA/logs/$TR_NAME.log." \
+    "The tee'd log path (2>&1 | tee <log>) is broken in bin/tmux-run.sh."
+  pass "tmux-run: atomic mutex — created then exists-alive, exactly one session, durable log written"
+fi
+
 # --- real conf, if present: validate the operator's ACTUAL identity (offline) --
 # Deterministic and read-only — sourcing only reads the file. This is what proves
 # the maintainer's own conf actually passes the guard, not just the temp fixtures.

@@ -30,6 +30,7 @@ levels across many different speeds 🤷🚲
 - [`jq`](https://jqlang.org/)
 - [`claude`](https://claude.com/claude-code) (Claude Code CLI)
 - `python3`, `git`
+- [`tmux`](https://github.com/tmux/tmux) (backs `bin/tmux-run.sh` — a worker's detached long-running jobs)
 - Dropbox, if any onboarded project uses the `dropbox-native` archetype (below)
 
 ### Install (one-time, per machine)
@@ -37,7 +38,7 @@ levels across many different speeds 🤷🚲
 1. Clone this repo.
 2. Install the dependencies above.
 3. `gh auth login`.
-4. `./bin/install.sh` — dep-checks (`gh`/`jq`/`claude`/`python3`/`git`), asserts the
+4. `./bin/install.sh` — dep-checks (`gh`/`jq`/`claude`/`python3`/`git`/`tmux`), asserts the
    in-repo host hooks are executable, creates `logs/` + `state/`, scaffolds
    `orchestrator.conf` from `orchestrator.conf.example`, renders the opt-in
    `/orchestrate` slash command into `~/.claude/commands/` (the one, narrow
