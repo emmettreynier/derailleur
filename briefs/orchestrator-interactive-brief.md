@@ -66,54 +66,40 @@ The instant you run a real `launch-worker.sh` / `launch-checker.sh` (not
 the item(s) you dispatched this session, and keep watching until **every** one is
 terminal — no cap on how many, and no time limit (a worker can run many minutes).
 
-Detect terminal state from **local** signals only — zero GitHub calls per tick.
-Dispatches run detached (their own session; no job handle to `wait` on), but each
-leaves a trail the launcher updates on exit:
+Detect terminal state from **local** signals only — zero GitHub calls per tick —
+with `bin/watch-dispatch.sh`, which encapsulates exactly this detection so you
+never reconstruct it by hand. Dispatches run detached (their own session; no job
+handle to `wait` on), but each leaves a trail the launcher updates on exit: a
+`ledger.md` `status` field that flips off `dispatched` to a terminal value
+(`done`, `interrupted-ratelimit`, `interrupted-budget`, `interrupted-error`,
+`unknown`), and — for a checker — a written `logs/<slug>-pr-<n>-verdict.json`.
+(`ledger.md`/`logs/` live at the derailleur checkout path in your session context.)
 
-- Each dispatch appends a `ledger.md` line whose final field is `status <value>`,
-  set to `dispatched` at launch:
-  - worker: `- #<issue> | … | status dispatched`
-  - checker: `- check pr#<n> | … | status dispatched`
-  When the session exits, the launcher flips that field to a terminal value —
-  `done`, `interrupted-ratelimit`, `interrupted-budget`, `interrupted-error`, or
-  `unknown`. **Status ≠ `dispatched` ⇒ that item is terminal.**
-- A checker additionally writes `logs/<slug>-pr-<n>-verdict.json` on a completed
-  review. (`ledger.md` and `logs/` live at the derailleur checkout path given in
-  your session context.)
+Invoke the script by that checkout's absolute path (or `dr watch-dispatch`),
+passing one slug-qualified token per item you dispatched this session:
 
-**Prefer `Monitor` (non-blocking) if it is in your toolset.** Arm one persistent
-`Monitor` whose command polls those local signals about every 15s and prints
-**one line per dispatched item the instant it goes terminal**, then exits once
-every watched item is terminal. Set `persistent: true` (a worker can outlast the
-default timeout). Because `Monitor` is non-blocking, you **stay responsive to the
-operator** while it runs. A sketch — resolve `$ORCH` to the checkout path from
-your session context, and list the items you actually dispatched:
+- worker: `<slug>#<issue>`  (e.g. `derailleur#26`)
+- checker: `<slug>#pr<n>`   (e.g. `derailleur#pr30`)
 
-    ORCH=<your derailleur checkout>
-    remaining=2                       # count of items you dispatched this session
-    st() { grep -E "^$1 \\|" "$ORCH/ledger.md" | tail -1 | sed -n 's/.*status //p'; }
-    while [ "$remaining" -gt 0 ]; do
-      # worker #12
-      s=$(st '- #12'); case "$s" in ''|dispatched) : ;;
-        *) echo "worker #12 -> $s"; remaining=$((remaining-1)); ;; esac  # unset #12 after firing
-      # checker pr#7 (terminal on status flip OR verdict file)
-      s=$(st '- check pr#7')
-      if [ -f "$ORCH/logs/<slug>-pr-7-verdict.json" ] || { [ -n "$s" ] && [ "$s" != dispatched ]; }; then
-        echo "checker pr#7 -> ${s:-verdict-written}"; remaining=$((remaining-1)); fi
-      sleep 15
-    done
+It prints **one line per item the instant it goes terminal** and exits once every
+watched item is terminal — no cap, no time limit. It fires on the interrupt/crash
+statuses (`interrupted-*`, `unknown`, and a dead-but-unfinalized pid) exactly as on
+`done` / a written verdict, so **a crashed or interrupted dispatch is never watched
+in silence** — that guarantee is in the script, not something you must remember.
 
-(Track which items have already fired so you don't double-count — e.g. drop each
-from the loop once emitted. Adapt the sketch to the exact items and slugs.)
+**Prefer `Monitor` (non-blocking) if it is in your toolset.** Wrap the script in one
+persistent `Monitor` so its per-item lines stream to you as notifications while you
+**stay responsive to the operator**:
 
-**Silence is not success.** The loop must emit on the interrupt/crash statuses
-(`interrupted-*`, `unknown`) exactly as it does on `done` / verdict-written, so an
-interrupted or crashed dispatch is never watched in silence.
+    Monitor: <your derailleur checkout>/bin/watch-dispatch.sh derailleur#26 derailleur#pr30
 
-**If `Monitor` is NOT in your toolset,** fall back to a **blocking** local-signal
-wait with identical terminal-state semantics: poll the same ledger-status /
-verdict-file signals in a loop until every dispatched item is terminal, then
-report. The only cost is that you can't take operator input until it ends.
+Set `persistent: true` (a worker can outlast the default timeout); the script polls
+about every 15s (tune with `--interval N`) and exits itself once all items are
+terminal.
+
+**If `Monitor` is NOT in your toolset,** run the same script **blocking** — identical
+terminal-state semantics; the only cost is that you can't take operator input until it
+returns.
 
 **On each terminal event, report the item + its authoritative outcome**, resolving
 the GitHub-side state with a **single** `board-digest.sh` (or `gh pr view`) call

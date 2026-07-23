@@ -299,7 +299,8 @@ derailleur/
 │   ├── config-common.sh           Loads operator identity from orchestrator.conf (sourced)
 │   ├── ledger-prune.sh            Drop stale ledger entries at the start of every cycle
 │   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees
-│   └── board-digest.sh            Deterministic board-state report (no LLM)
+│   ├── board-digest.sh            Deterministic board-state report (no LLM)
+│   └── watch-dispatch.sh          Watch dispatched worker(s)/checker(s) to terminal state (local signals; no LLM)
 ├── ledger.md, logs/, state/      Machine-local runtime state (gitignored)
 └── diagrams/                     Supporting diagrams
 ```
