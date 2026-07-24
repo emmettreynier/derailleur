@@ -73,12 +73,27 @@ MANIFEST="$ORCH/projects/$REPO_SLUG.yml"
 yml() { sed -nE "s/^$1:[[:space:]]*(.+)/\1/p" "$MANIFEST" \
           | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//' | head -1; }
 expand() { eval echo "$1"; }   # ~ and $VAR expansion for path fields
+# Render a yaml list field as a comma-separated string (mirrors launch-worker.sh).
+yml_list() { python3 - "$MANIFEST" "$1" <<'PY'
+import re, sys
+text = open(sys.argv[1]).read()
+m = re.search(rf'^{sys.argv[2]}:\s*(?:#.*)?\n((?:[ \t]+-.*\n?)+)', text, re.M)
+out = []
+if m:
+    for line in m.group(1).splitlines():
+        mm = re.match(r'\s*-\s*(.+?)\s*(?:#.*)?$', line)
+        if mm and mm.group(1):
+            out.append(mm.group(1).strip().strip('"').strip("'"))
+print(', '.join(out))
+PY
+}
 
 REPO="$(yml repo)"
 WORKING_CLONE="$(expand "$(yml working_clone)")"
 WORKTREES_DIR="$(expand "$(yml worktrees_dir)")"
 RAW_RESOLVED="$(expand "$(yml raw_resolved)")"
 DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
+CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
 
 # --- resolve the PR: branch, the issue it closes, and ready/draft state -------
 PR_JSON="$(gh pr view "$PR" -R "$REPO" --json isDraft,headRefName,closingIssuesReferences,state 2>/dev/null)" \
@@ -178,7 +193,7 @@ fi
 # the checker only ever created a single `data/raw -> raw_resolved` symlink and never ran
 # a repo's own setup-symlinks.sh, so for a multi-tree repo (california-pesticides) it
 # pointed data/raw at the whole data dir and left derived/ absent (issue #25).
-bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG"
+bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS"
 
 # Belt-and-suspenders mutation baseline: capture the worktree's tracked-file state
 # before the checker runs; we re-check after, so an accidental write surfaces here

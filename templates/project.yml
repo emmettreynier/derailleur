@@ -59,6 +59,23 @@ dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "
 # and the launcher must NOT guess it from raw_resolved (that doubled the project path and
 # silently created zero links — issue #25).
 
+# critical_paths: OPTIONAL. The load-bearing input link(s) this repo's worktree MUST have
+# before a worker/checker starts, as a list of paths relative to the worktree root. Before
+# dispatch, the launcher's host-side gate asserts EVERY listed path exists and resolves to
+# a real directory, aborting the dispatch (before `claude` is spawned) if any doesn't — so
+# a worker never computes on missing inputs and exits 0 (issues #25/#35/#43). Use this for
+# any repo whose load-bearing links are NOT the generic data/raw — i.e. a repo that ships
+# its own setup-symlinks.sh creating its own link names. Example for distance-decay-est,
+# whose setup-symlinks.sh creates two top-level dirs (mind the space — quote them):
+#   critical_paths:
+#     - "06 Raw_data"
+#     - "07 Dataclean"
+# When OMITTED, the gate defaults to asserting the generic data/raw link (the branch-(b)
+# template invariant). Code-only manifests (raw_resolved == working_clone) and repos with
+# no raw_resolved are exempt. A repo that ships its own setup-symlinks.sh but declares no
+# critical_paths gets no hard gate on its inputs (it never scaffolds data/raw) — declare
+# them here to gate it.
+
 # ── Confidentiality (READ before a live dispatch on a repo with confidential data) ──
 # The deny-hook blocks WRITES/DELETES under the raw prefixes below; it does NOT block
 # reads. READ-protection of sensitive data comes from --add-dir scoping: a worker can
