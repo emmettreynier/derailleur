@@ -1,7 +1,7 @@
 ---
 description: Resume work on an issue — read the issue, last state comment, and PR diff, then continue from where the last session paused
 argument-hint: "<issue number or branch name>"
-allowed-tools: Bash(git status:*), Bash(git fetch:*), Bash(git checkout:*), Bash(git switch:*), Bash(git pull:*), Bash(git branch:*), Bash(git log:*), Bash(git diff:*), Bash(gh pr:*), Bash(gh issue:*), Bash(gh project:*)
+allowed-tools: Bash(git status:*), Bash(git fetch:*), Bash(git checkout:*), Bash(git switch:*), Bash(git pull:*), Bash(git branch:*), Bash(git log:*), Bash(git diff:*), Bash(gh pr:*), Bash(gh issue:*), Bash(gh project:*), Bash(rtk git status:*), Bash(rtk git fetch:*), Bash(rtk git checkout:*), Bash(rtk git switch:*), Bash(rtk git pull:*), Bash(rtk git branch:*), Bash(rtk git log:*), Bash(rtk git diff:*), Bash(rtk gh pr:*), Bash(rtk gh issue:*), Bash(rtk gh project:*)
 ---
 
 Resume work that a previous session left off. GitHub is the source of truth — reconstruct state from it, don't guess. Treat $ARGUMENTS as the issue number or branch name (ask me if it's missing or ambiguous).

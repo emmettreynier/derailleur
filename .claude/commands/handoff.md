@@ -1,7 +1,7 @@
 ---
 description: Leave the repo recoverable — commit, push, update the PR (draft if WIP, ready if complete), and post a state comment on the issue
 argument-hint: "[optional note about where things stand]"
-allowed-tools: Bash(git status:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git branch:*), Bash(git log:*), Bash(git diff:*), Bash(gh pr:*), Bash(gh issue:*), Bash(gh project:*)
+allowed-tools: Bash(git status:*), Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git branch:*), Bash(git log:*), Bash(git diff:*), Bash(gh pr:*), Bash(gh issue:*), Bash(gh project:*), Bash(rtk git status:*), Bash(rtk git add:*), Bash(rtk git commit:*), Bash(rtk git push:*), Bash(rtk git branch:*), Bash(rtk git log:*), Bash(rtk git diff:*), Bash(rtk gh pr:*), Bash(rtk gh issue:*), Bash(rtk gh project:*)
 ---
 
 Wrap up the current session so any agent (or I) can pick this work up cleanly from GitHub alone. GitHub is the source of truth — leave nothing critical stuck in session context.
