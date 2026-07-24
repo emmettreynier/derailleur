@@ -199,10 +199,11 @@ report_mutation() {
 # untracked cruft (it blocks worktree-prune --auto on merged worktrees) — skip it.
 bootstrap_worktree_data() {
   local worktree="$1" raw_resolved="$2" working_clone="$3" dropbox_proj="$4" slug="$5"
-  local raw_real clone_real
+  local raw_real clone_real own_script=0
   raw_real="$(cd "$raw_resolved" 2>/dev/null && pwd -P || echo "")"
   clone_real="$(cd "$working_clone" 2>/dev/null && pwd -P || echo "")"
   if [ -x "$worktree/setup-symlinks.sh" ]; then
+    own_script=1
     local ss_out ss_rc=0
     # Separate declaration from assignment so the command-substitution exit status
     # isn't masked by `local` (a bash gotcha); capture it into ss_rc via `|| `.
@@ -244,6 +245,19 @@ bootstrap_worktree_data() {
   local raw_link="$worktree/data/raw"
   if [ ! -d "$raw_link" ]; then          # missing, or a symlink whose target doesn't resolve
     local raw_target; raw_target="$(readlink "$raw_link" 2>/dev/null || echo "$raw_resolved")"
+    if [ "$own_script" = 1 ]; then
+      # HOTFIX (2026-07-24, see derailleur issue tracking this): a repo that ships its
+      # own setup-symlinks.sh doesn't scaffold the generic data/raw path at all — it
+      # uses its own link names (e.g. distance-decay-est's "06 Raw_data"/"07 Dataclean"
+      # at the repo root). The generic data/raw invariant this gate checks simply
+      # doesn't apply here, so the prior hard-fail blocked EVERY dispatch to such a
+      # repo. Downgraded to a warning: trust the repo's own script + the SKIP/ERROR
+      # note above, don't block dispatch on an invariant that was never scaffolded.
+      echo "⚠ note: $raw_link does not resolve, but $slug ships its own setup-symlinks.sh" >&2
+      echo "  (which doesn't scaffold data/raw — see that script's own link names). Proceeding;" >&2
+      echo "  check the setup-symlinks.sh output above for SKIP/ERROR on the links it DOES manage." >&2
+      return 0
+    fi
     echo "✗ dispatch aborted: the worktree's critical raw-data link does not resolve to a directory:" >&2
     echo "    $raw_link -> ${raw_target:-<missing>}" >&2
     echo "  A worker/checker would compute on missing inputs and exit 0 (issue #25/#35)." >&2

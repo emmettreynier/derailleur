@@ -62,3 +62,22 @@ assert_rc 0 "$rc" "bootstrap gate: code-only manifest exits 0 (gate skipped)" \
   "The gate must skip when raw_resolved resolves to the working clone — bin/dispatch-common.sh."
 assert_file_absent "$g_wt/data/raw" "bootstrap gate: code-only manifest scaffolds no data/raw link" \
   "raw_resolved == working_clone must skip the data/raw scaffold entirely."
+
+# state 5 — own setup-symlinks.sh, doesn't scaffold data/raw: a repo that ships its own
+# setup-symlinks.sh (e.g. distance-decay-est) uses its own link names, never data/raw.
+# The generic data/raw invariant doesn't apply — the gate must WARN, not abort (hotfix,
+# 2026-07-24: the prior hard-fail blocked every dispatch to such a repo).
+g_wt="$GROOT/wt-ownscript"; mkdir -p "$g_wt"
+cat > "$g_wt/setup-symlinks.sh" <<'SH'
+#!/usr/bin/env bash
+echo "  OK    some-other-link -> somewhere"
+SH
+chmod +x "$g_wt/setup-symlinks.sh"
+g_raw="$GROOT/raw-ownscript"; mkdir -p "$g_raw"; : >"$g_raw/input.csv"
+rc=0; out="$(bootstrap_worktree_data "$g_wt" "$g_raw" "$G_CLONE" "" gate-demo 2>&1)" || rc=$?
+assert_rc 0 "$rc" "bootstrap gate: own setup-symlinks.sh with no data/raw warns, doesn't abort" \
+  "A repo shipping its own setup-symlinks.sh must not be hard-failed on the generic data/raw path — bin/dispatch-common.sh."
+assert_contains "$out" "own setup-symlinks.sh" "bootstrap gate: own-script case prints an explanatory warning" \
+  "The warning should explain why the generic data/raw check doesn't apply — bin/dispatch-common.sh."
+assert_file_absent "$g_wt/data/raw" "bootstrap gate: own-script case scaffolds no generic data/raw link" \
+  "bootstrap_worktree_data must defer entirely to the repo's own script in this branch."
