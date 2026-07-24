@@ -19,7 +19,7 @@ research work, from whatever repo this session is running in. Scope: `$ARGUMENTS
 
 ## Board digest (your entire view — read it first)
 
-!`{{DERAILLEUR_ROOT}}/bin/board-digest.sh $ARGUMENTS`
+!`dr board-digest $ARGUMENTS`
 
 ## Your role
 
