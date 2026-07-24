@@ -4,6 +4,8 @@
 
 # derailleur
 
+[![CI](https://github.com/emmettreynier/derailleur/actions/workflows/ci.yml/badge.svg)](https://github.com/emmettreynier/derailleur/actions/workflows/ci.yml)
+
 A local, autonomous system that dispatches GitHub-issue work to headless Claude Code
 workers, verifies it with an LLM checker, and surfaces only the decisions that need you.
 
@@ -66,44 +68,59 @@ work tree — heed it, because a committed `orchestrate.md` carries one machine'
 directory and breaks `/orchestrate` on every other machine that pulls it. Either gitignore
 the file there or repoint `~/.claude/commands` somewhere unversioned.
 
-### Verify / smoke test
+### Verify / test suite
 
-`dr smoke-test` is a one-command check that the operator-identity bootstrap
-still works. All dispatch flows through a single guard in `bin/config-common.sh`,
-which reads your gitignored `orchestrator.conf` and aborts if it's missing or any of
-the five fields (`OPERATOR_NAME`, `GITHUB_HANDLE`, `PR_OWNER`, `LAUNCHD_LABEL`,
-`BOARD_PROJECT`) is blank. The smoke test exercises that guard end-to-end so a
-regression is caught here, not on a labmate's first real run.
+`dr test` runs the shell layer's test suite: a growable, framework-free set of
+bash tests under `tests/`, in **two tiers**.
 
-**What it checks** (against throwaway temp confs — it never touches your real one):
-a missing conf aborts; a conf with a blank field aborts *and names the field*; a
-fully-filled conf exits 0, exports all five vars, and renders `{{OPERATOR_NAME}}`
-into a brief the way the launchers do. It also exercises the `derailleur`/`dr` CLI
-dispatcher — `help`/unknown-command/sourced-lib routing, and (the subtle part)
-that it resolves back to this checkout when invoked through a symlink, the way
-`install.sh` links it onto PATH. It then unit-tests `watch-dispatch.sh` against a
-throwaway ledger/verdict fixture — that a `done` worker, a written checker verdict
-(which wins over a still-`dispatched` status), a dead-but-unfinalized pid
-(`unknown`), and a genuinely live dispatch (not terminal) each classify correctly,
-and that malformed / missing item args exit 2. If a real `orchestrator.conf` is present it
-also confirms *your* conf passes the guard, and — when `gh` is authenticated —
-that `launch-orchestrator.sh --dry-run` renders your board digest. It asserts your
-real conf is byte-identical before and after.
+- **Offline tier** (`tests/offline/`) — deterministic, needs no network / `gh`. It
+  always runs and must pass. This is the tier CI runs on every push (see the badge
+  above): `dr test --offline` on `macos-latest`, whose runner still ships **bash 3.2**,
+  so CI exercises the same interpreter (and its compat traps) your Mac uses.
+- **Online tier** (`tests/online/`) — exercises the real `gh` paths (board digest,
+  live pruning). Each test **SKIPs with a warning** when there's no network / `gh`
+  auth, and never fails the run when offline.
+
+**What the offline tier covers** (all against throwaway `mktemp` sandboxes — it never
+touches your real `orchestrator.conf` or any project data): the operator-identity
+guard in all three states (missing conf aborts; a blank field aborts *and names the
+field*; a filled conf exits 0, exports all five vars, and renders `{{OPERATOR_NAME}}`
+into a brief the way the launchers do); the `derailleur`/`dr` CLI dispatcher
+(`help`/unknown-command/sourced-lib routing, and the subtle symlink resolution back
+to this checkout); `watch-dispatch.sh` terminal-state classification (done /
+verdict-wins-over-status / dead-pid=unknown / live=pending, plus malformed/no-arg
+rejection); `tmux-run.sh` name/log derivation, `--tail` validation, `{{SLUG}}` wiring,
+and (when `tmux` is present) the atomic-create mutex; the `scheduled_repos` allow-list
+reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` on an
+empty sandbox (the bash-3.2 regression net); `ledger-prune.sh` dead-pid pruning; and
+the `bootstrap_worktree_data` critical raw-link gate across all four states
+(missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
+manifest → exempt). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
+and is byte-identical before/after.
+
+**What the online tier covers:** `board-digest.sh` emits a digest against the live
+board; `launch-orchestrator.sh --dry-run` renders it end-to-end from your conf; and
+`ledger-prune.sh` prunes a genuinely closed issue (kept an open one) against real `gh`.
 
 **When to run it:** right after `./bin/install.sh` and filling in
-`orchestrator.conf`, and any time you edit `orchestrator.conf`, the launchers, or
-`bin/config-common.sh`.
+`orchestrator.conf`, and any time you edit `orchestrator.conf`, the launchers,
+`bin/config-common.sh`, or any of the `bin/` scripts a test covers.
 
 **How to run it:**
 
 ```bash
-dr smoke-test            # prints PASS / SKIP per check; exits 0 if all pass
+dr test                  # full suite (offline + online); online SKIPs if no gh/network
+dr test --offline        # offline tier only (what CI runs)
 ```
 
+Each test file is self-contained and can be run directly for debugging, e.g.
+`bash tests/offline/test-config-guard.sh`.
+
 **How to read a failure:** each check prints a `PASS:` line; steps that need the
-network or `gh` auth print `SKIP:` and never fail the run (it's deterministic and
-passes offline). On the first failed check the script prints a `FAIL:` line saying
-*what failed + what to do*, points back to this section, and exits nonzero.
+network or `gh` auth print `SKIP:` and never fail the run. A failed assertion prints a
+`FAIL:` line saying *what failed + what to do*, and the file exits nonzero. `dr test`
+tallies PASS/SKIP/FAIL and exits nonzero **iff an offline test failed** — online SKIPs
+never make it exit nonzero.
 
 ### Onboard a project
 
@@ -333,7 +350,13 @@ derailleur/
 │   ├── ledger-prune.sh            Drop stale ledger entries at the start of every cycle
 │   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees
 │   ├── board-digest.sh            Deterministic board-state report (no LLM)
-│   └── watch-dispatch.sh          Watch dispatched worker(s)/checker(s) to terminal state (local signals; no LLM)
+│   ├── watch-dispatch.sh          Watch dispatched worker(s)/checker(s) to terminal state (local signals; no LLM)
+│   └── test.sh                    Two-tier test-suite runner (surfaced as `dr test`)
+├── tests/                        Shell-layer test suite (framework-free bash)
+│   ├── lib/                          Shared assert + throwaway-sandbox helpers
+│   ├── offline/                      Deterministic tests (no gh/network) — the tier CI runs
+│   └── online/                       Real-`gh` tests that SKIP cleanly when offline
+├── .github/workflows/ci.yml      CI: runs the offline tier on macos-latest (bash 3.2)
 ├── ledger.md, logs/, state/      Machine-local runtime state (gitignored)
 └── diagrams/                     Supporting diagrams
 ```

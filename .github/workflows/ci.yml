@@ -1,0 +1,22 @@
+name: CI
+
+# Runs the OFFLINE tier of the derailleur test suite (dr test --offline). The offline
+# tier is deterministic and needs no network / gh auth, so CI needs no secrets. We run
+# on macos-latest because that runner still ships bash 3.2 — the same interpreter the
+# operator's Mac uses — so CI exercises the real bash-3.2 compat constraints (empty-array
+# under set -u, bare-short-circuit return under set -e) rather than papering over them on
+# a Linux/bash-5 runner. The online tier is not run here (it has no gh auth and SKIPs).
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline-tests:
+    runs-on: macos-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+      - name: Show bash version (should be 3.2, the compat target)
+        run: bash --version | head -1
+      - name: Run offline test tier
+        run: ./bin/test.sh --offline
