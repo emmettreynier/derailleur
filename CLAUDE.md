@@ -58,9 +58,14 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   leading HTML comment so the YAML frontmatter is the first line** (a command with a
   comment before its frontmatter won't parse). Keep the repo copy path-free — the
   only absolute path appears in the install-rendered output, never in the diff.
-- Prefer a script's `--dry-run` flag over editing blind when verifying a change —
-  there's no test suite, so `--dry-run` output and `logs/cycle.log` are how you
-  check correctness.
+- Run `dr test` (the two-tier suite under `tests/`; `dr test --offline` for the
+  deterministic tier CI runs) after touching any `bin/` logic it covers —
+  `config-common.sh`, the dispatcher, `watch-dispatch.sh`, `tmux-run.sh`,
+  `schedule.sh` enable/disable, `worktree-prune.sh`, `ledger-prune.sh`. For behavior
+  the suite doesn't cover, a script's `--dry-run` output and `logs/cycle.log` are the
+  fallback for checking correctness. When you change one of those scripts, extend the
+  matching `tests/offline/test-*.sh` rather than leaving the check to `--dry-run`
+  eyeballing.
 - Check `design.md`'s "Verified CLI capabilities" table before relying on a
   `claude` CLI flag — some (e.g. `--max-turns`) don't exist in the pinned version.
 - Any change to the safety model (hooks in `host/hooks/`, `--add-dir`,

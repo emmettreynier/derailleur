@@ -36,8 +36,8 @@ if [ -n "$_conf_missing" ]; then
       echo "        No orchestrator.conf found. Copy the example and fill it in:"
       echo "          cp \"$_conf_example\" \"$_conf_file\""
     fi
-    echo "        Then confirm the bootstrap with bin/smoke-test.sh — see the"
-    echo "        README \"Verify / smoke test\" section."
+    echo "        Then confirm the bootstrap with 'dr test' — see the"
+    echo "        README \"Verify / test suite\" section."
   } >&2
   exit 1
 fi
