@@ -19,9 +19,10 @@
 # Env:
 #   CAP             worker concurrency cap — max workers in flight at once (default 2)
 #   BUDGET          orchestrator session budget in USD (default 2.00)
-#   MODEL           orchestrator session model (default sonnet — it reads the digest
-#                   and routes; pinning it keeps the cycle off whatever expensive
-#                   default an interactive session happens to be set to)
+#   MODEL           orchestrator session model. Resolution: MODEL env →
+#                   ORCHESTRATOR_MODEL (orchestrator.conf) → sonnet. It reads the
+#                   digest and routes; pinning it keeps the cycle off whatever
+#                   expensive default an interactive session happens to be set to.
 #   WORKER_BUDGET   per-worker session budget in USD (default 10.00)
 #   CHECKER_BUDGET  per-checker session budget in USD (default 3.00)
 #   CHECKER_LIMIT   max checker rounds per PR before escalating to the operator (default 4)
@@ -33,7 +34,10 @@ ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ORCH/bin/config-common.sh"   # OPERATOR_NAME, GITHUB_HANDLE (escalation @-mention)
 CAP="${CAP:-2}"
 BUDGET="${BUDGET:-2.00}"
-MODEL="${MODEL:-sonnet}"
+# MODEL env overrides; else ORCHESTRATOR_MODEL from conf (config-common.sh sourced
+# above already defaulted it to sonnet); the trailing sonnet is a belt-and-suspenders
+# default in case that var is somehow unset. Interactive path is unaffected.
+MODEL="${MODEL:-${ORCHESTRATOR_MODEL:-sonnet}}"
 WORKER_BUDGET="${WORKER_BUDGET:-10.00}"
 CHECKER_BUDGET="${CHECKER_BUDGET:-3.00}"
 CHECKER_LIMIT="${CHECKER_LIMIT:-4}"

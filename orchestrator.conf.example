@@ -35,6 +35,16 @@ BOARD_PROJECT="1"
 
 # --- Optional -----------------------------------------------------------------
 
+# Model for the HEADLESS/autonomous orchestrator (orchestrator-cycle.sh, whether
+# cron- or hand-triggered). It only reads the board digest and routes, so it's
+# pinned cheap. Resolution order is: MODEL env var → this field → sonnet, so an
+# explicit `MODEL=… dr orchestrator-cycle` still overrides. Optional: absence
+# defaults to sonnet and never fails the identity guard. This does NOT affect the
+# INTERACTIVE orchestrator (launch-orchestrator.sh / /orchestrate), which stays on
+# the human-present session's model.
+#
+# ORCHESTRATOR_MODEL="sonnet"
+
 # Dispatch schedule — the SINGLE source of truth for when the scheduled loop fires.
 # Space-separated 24h HH:MM slots (zero-padded). `schedule.sh install` derives BOTH
 # the launchd fire times (StartCalendarInterval) AND the pmset wake chain from this
