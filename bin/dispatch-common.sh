@@ -173,8 +173,10 @@ report_mutation() {
   fi
 }
 
-# bootstrap_worktree_data <worktree> <raw_resolved> <working_clone> <dropbox_proj> <slug>
+# bootstrap_worktree_data <worktree> <raw_resolved> <working_clone> <dropbox_proj> <slug> [critical_paths]
 # Provision a fresh worktree's machine-local (gitignored) data dirs BEFORE dispatch.
+# <critical_paths> (optional, 6th arg) is a comma-separated list of worktree-relative
+# paths a manifest declares load-bearing (issue #43); the gate below asserts every one.
 # Sourced here (not duplicated in each launcher) so worker and checker bootstrap the
 # SAME way — the checker re-runs pipeline stages that read those same trees, so it needs
 # identical links. Two shapes:
@@ -199,6 +201,7 @@ report_mutation() {
 # untracked cruft (it blocks worktree-prune --auto on merged worktrees) — skip it.
 bootstrap_worktree_data() {
   local worktree="$1" raw_resolved="$2" working_clone="$3" dropbox_proj="$4" slug="$5"
+  local critical_paths="${6:-}"   # comma-separated, relative to the worktree root (issue #43)
   local raw_real clone_real own_script=0
   raw_real="$(cd "$raw_resolved" 2>/dev/null && pwd -P || echo "")"
   clone_real="$(cd "$working_clone" 2>/dev/null && pwd -P || echo "")"
@@ -216,11 +219,11 @@ bootstrap_worktree_data() {
     if [ "$ss_rc" -ne 0 ]; then
       echo "⚠ setup-symlinks.sh exited $ss_rc — $slug worktree may be missing data symlinks." >&2
     elif printf '%s\n' "$ss_out" | grep -qE '^[[:space:]]*(SKIP|ERROR)\b'; then
-      # DEMOTED (issue #35): a SKIP/ERROR here is often a legitimately-optional tree
-      # (figures, usrds-proposal), so this is a quiet one-line note rather than the old
-      # scary multi-line block that risked alert-fatigue. The CRITICAL data/raw link is
-      # now hard-gated below — that gate, not this warning, is what stops the #25 silent
-      # failure (an all-SKIP run computing on missing inputs and exiting 0).
+      # A SKIP/ERROR here is often a legitimately-optional tree (figures, usrds-proposal),
+      # so this stays a quiet one-line note rather than a hard-fail — promoting it would
+      # false-positive on every repo with an optional tree (issue #35's demotion rationale
+      # still holds). The REAL gate for a branch-(a) repo is the manifest's critical_paths
+      # (issue #43): declare the load-bearing links and the gate below asserts them.
       echo "note: setup-symlinks.sh reported SKIP/ERROR for one or more (optional) links (see output above)." >&2
     fi
   elif [ -n "$raw_resolved" ] && [ "$raw_real" != "$clone_real" ]; then
@@ -228,36 +231,63 @@ bootstrap_worktree_data() {
     ln -sfn "$raw_resolved" "$worktree/data/raw"
   fi
 
-  # ── Critical raw-data link gate (issue #35 — defense-in-depth for #25) ─────────
-  # A worker/checker must NEVER start against a worktree whose critical data/raw link
-  # didn't resolve, or it computes on missing inputs and exits 0 (the #25 silent
-  # failure). This is a mechanical host-side stop: both launchers run under
-  # `set -euo pipefail`, so a non-zero return here aborts the dispatch BEFORE `claude`
-  # is spawned. It only reads/stats paths — no writes under the raw tree. `--dry-run`
-  # never reaches here (the dry-run block in each launcher exits before bootstrap runs).
+  # ── Critical-path gate (issue #35/#43 — defense-in-depth for #25) ──────────────
+  # A worker/checker must NEVER start against a worktree whose load-bearing inputs
+  # didn't link, or it computes on missing data and exits 0 (the #25 silent failure).
+  # Mechanical host-side stop: both launchers run under `set -euo pipefail`, so a
+  # non-zero return here aborts the dispatch BEFORE `claude` is spawned. It only
+  # reads/stats paths — no writes under the raw tree. `--dry-run` never reaches here
+  # (each launcher's dry-run block exits before bootstrap runs).
   #
-  # Skip when there is no distinct raw tree to assert: no raw_resolved configured, or a
+  # Which paths get asserted, in precedence order:
+  #   1. manifest `critical_paths` (the 6th arg) — the robust mechanism for repos whose
+  #      load-bearing links are NOT the generic data/raw (issue #43). A branch-(a) repo
+  #      that ships its own setup-symlinks.sh (e.g. distance-decay-est: "06 Raw_data" /
+  #      "07 Dataclean" at the repo root) declares them here so it is genuinely gated,
+  #      not merely warned. Every listed path must exist and resolve to a directory.
+  #   2. unset → the generic data/raw invariant (#35), for branch-(b) template repos.
+  # Exemptions apply to the DEFAULT (unset) path only: no raw_resolved configured, or a
   # CODE-ONLY manifest whose raw_resolved resolves to the working clone itself
-  # (raw_real == clone_real — the same case the bootstrap branch above skips).
+  # (raw_real == clone_real), or a branch-(a) repo that declared nothing to assert (its
+  # generic data/raw is never scaffolded — trust its own script + the SKIP/ERROR note).
+  if [ -n "$critical_paths" ]; then
+    local cp p tgt _oifs="$IFS"
+    IFS=','
+    for cp in $critical_paths; do
+      IFS="$_oifs"
+      while [ "${cp# }" != "$cp" ]; do cp="${cp# }"; done   # trim leading spaces (bash 3.2)
+      while [ "${cp% }" != "$cp" ]; do cp="${cp% }"; done   # trim trailing spaces
+      if [ -n "$cp" ] && [ ! -d "$worktree/$cp" ]; then
+        p="$worktree/$cp"
+        tgt="$(readlink "$p" 2>/dev/null || echo "$p")"
+        echo "✗ dispatch aborted: a declared critical path does not resolve to a directory:" >&2
+        echo "    $p -> ${tgt:-<missing>}" >&2
+        echo "  A worker/checker would compute on missing inputs and exit 0 (issue #25/#35)." >&2
+        echo "  Fix the link (or the tree it points at) — critical_paths in projects/$slug.yml." >&2
+        return 1
+      fi
+      IFS=','
+    done
+    IFS="$_oifs"
+    return 0
+  fi
+
+  # No critical_paths declared — fall back to the generic data/raw invariant (#35).
+  # Skip when there is no distinct raw tree to assert: no raw_resolved, a CODE-ONLY
+  # manifest (raw_real == clone_real), or a branch-(a) repo (which never scaffolds the
+  # generic data/raw; its real inputs belong in critical_paths above).
   if [ -z "$raw_resolved" ] || { [ -n "$raw_real" ] && [ "$raw_real" = "$clone_real" ]; }; then
+    return 0
+  fi
+  if [ "$own_script" = 1 ]; then
+    echo "note: $slug ships its own setup-symlinks.sh but declares no critical_paths — no" >&2
+    echo "  hard gate on its inputs. Declare the load-bearing links in critical_paths" >&2
+    echo "  (projects/$slug.yml) to gate them; see the setup-symlinks.sh output above for SKIP/ERROR." >&2
     return 0
   fi
   local raw_link="$worktree/data/raw"
   if [ ! -d "$raw_link" ]; then          # missing, or a symlink whose target doesn't resolve
     local raw_target; raw_target="$(readlink "$raw_link" 2>/dev/null || echo "$raw_resolved")"
-    if [ "$own_script" = 1 ]; then
-      # HOTFIX (2026-07-24, see derailleur issue tracking this): a repo that ships its
-      # own setup-symlinks.sh doesn't scaffold the generic data/raw path at all — it
-      # uses its own link names (e.g. distance-decay-est's "06 Raw_data"/"07 Dataclean"
-      # at the repo root). The generic data/raw invariant this gate checks simply
-      # doesn't apply here, so the prior hard-fail blocked EVERY dispatch to such a
-      # repo. Downgraded to a warning: trust the repo's own script + the SKIP/ERROR
-      # note above, don't block dispatch on an invariant that was never scaffolded.
-      echo "⚠ note: $raw_link does not resolve, but $slug ships its own setup-symlinks.sh" >&2
-      echo "  (which doesn't scaffold data/raw — see that script's own link names). Proceeding;" >&2
-      echo "  check the setup-symlinks.sh output above for SKIP/ERROR on the links it DOES manage." >&2
-      return 0
-    fi
     echo "✗ dispatch aborted: the worktree's critical raw-data link does not resolve to a directory:" >&2
     echo "    $raw_link -> ${raw_target:-<missing>}" >&2
     echo "  A worker/checker would compute on missing inputs and exit 0 (issue #25/#35)." >&2

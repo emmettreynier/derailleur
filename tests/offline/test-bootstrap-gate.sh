@@ -63,21 +63,73 @@ assert_rc 0 "$rc" "bootstrap gate: code-only manifest exits 0 (gate skipped)" \
 assert_file_absent "$g_wt/data/raw" "bootstrap gate: code-only manifest scaffolds no data/raw link" \
   "raw_resolved == working_clone must skip the data/raw scaffold entirely."
 
-# state 5 — own setup-symlinks.sh, doesn't scaffold data/raw: a repo that ships its own
-# setup-symlinks.sh (e.g. distance-decay-est) uses its own link names, never data/raw.
-# The generic data/raw invariant doesn't apply — the gate must WARN, not abort (hotfix,
-# 2026-07-24: the prior hard-fail blocked every dispatch to such a repo).
-g_wt="$GROOT/wt-ownscript"; mkdir -p "$g_wt"
-cat > "$g_wt/setup-symlinks.sh" <<'SH'
+# --- helper: build a throwaway branch-(a) worktree that ships its own setup-symlinks.sh
+# creating one top-level dir with a space in its name (mirrors distance-decay-est's
+# "06 Raw_data"). bootstrap_worktree_data runs this script itself (cd'd into the worktree),
+# so it need not be pre-run here. Pass 1 to create a real "06 Raw_data" dir, 0 to SKIP it
+# (leaving the critical path absent so the gate can fire).
+make_ownscript_wt() {
+  local wt="$1" make_target="$2"
+  mkdir -p "$wt"
+  if [ "$make_target" = 1 ]; then
+    cat > "$wt/setup-symlinks.sh" <<'SH'
 #!/usr/bin/env bash
-echo "  OK    some-other-link -> somewhere"
+mkdir -p "$PWD/../ownscript-shared/06 Raw_data"; : > "$PWD/../ownscript-shared/06 Raw_data/x.csv"
+ln -sfn "$PWD/../ownscript-shared/06 Raw_data" "$PWD/06 Raw_data"
+echo "  OK    06 Raw_data -> ../ownscript-shared"
 SH
-chmod +x "$g_wt/setup-symlinks.sh"
+  else
+    cat > "$wt/setup-symlinks.sh" <<'SH'
+#!/usr/bin/env bash
+echo "  SKIP  06 Raw_data (target missing)"
+SH
+  fi
+  chmod +x "$wt/setup-symlinks.sh"
+}
+
+# state 5 — own setup-symlinks.sh, NO critical_paths declared: a branch-(a) repo uses its
+# own link names and never scaffolds the generic data/raw. It must NOT be hard-failed on
+# the generic path (issue #43 reverses the #44 warning but keeps the no-false-positive
+# invariant): the gate proceeds (rc 0) and prints a note steering the operator to declare
+# critical_paths. There is a real, populated raw_resolved (an unrelated shared tree).
+g_wt="$GROOT/wt-ownscript-nocp"
+make_ownscript_wt "$g_wt" 1
 g_raw="$GROOT/raw-ownscript"; mkdir -p "$g_raw"; : >"$g_raw/input.csv"
 rc=0; out="$(bootstrap_worktree_data "$g_wt" "$g_raw" "$G_CLONE" "" gate-demo 2>&1)" || rc=$?
-assert_rc 0 "$rc" "bootstrap gate: own setup-symlinks.sh with no data/raw warns, doesn't abort" \
-  "A repo shipping its own setup-symlinks.sh must not be hard-failed on the generic data/raw path — bin/dispatch-common.sh."
-assert_contains "$out" "own setup-symlinks.sh" "bootstrap gate: own-script case prints an explanatory warning" \
-  "The warning should explain why the generic data/raw check doesn't apply — bin/dispatch-common.sh."
+assert_rc 0 "$rc" "bootstrap gate: own setup-symlinks.sh, no critical_paths → proceeds (no data/raw hard-fail)" \
+  "A branch-(a) repo declaring no critical_paths must not be hard-failed on the generic data/raw path — bin/dispatch-common.sh."
+assert_contains "$out" "critical_paths" "bootstrap gate: own-script/no-cp case steers to critical_paths" \
+  "The note should tell the operator to declare critical_paths to gate a branch-(a) repo — bin/dispatch-common.sh."
 assert_file_absent "$g_wt/data/raw" "bootstrap gate: own-script case scaffolds no generic data/raw link" \
   "bootstrap_worktree_data must defer entirely to the repo's own script in this branch."
+
+# state 6 — own setup-symlinks.sh + declared critical_paths that RESOLVE: the repo's own
+# script created "06 Raw_data", the manifest declares it critical, and the gate finds it —
+# dispatch proceeds (rc 0), no abort. Exercises the comma-split + space-in-name path.
+g_wt="$GROOT/wt-ownscript-ok"
+make_ownscript_wt "$g_wt" 1
+rc=0; out="$(bootstrap_worktree_data "$g_wt" "$g_raw" "$G_CLONE" "" gate-demo "06 Raw_data" 2>&1)" || rc=$?
+assert_rc 0 "$rc" "bootstrap gate: branch-(a) + resolving critical_paths → proceeds" \
+  "A declared critical path that resolves to a real dir must pass the gate cleanly — bin/dispatch-common.sh."
+
+# state 7 — own setup-symlinks.sh + declared critical_paths that DON'T resolve: the target
+# was never created, so "06 Raw_data" is a dangling link; the gate must ABORT non-zero,
+# naming the offending path and pointing at critical_paths in the manifest.
+g_wt="$GROOT/wt-ownscript-broken"
+make_ownscript_wt "$g_wt" 0
+rc=0; out="$(bootstrap_worktree_data "$g_wt" "$g_raw" "$G_CLONE" "" gate-demo "06 Raw_data, 07 Dataclean" 2>&1)" || rc=$?
+assert_ne 0 "$rc" "bootstrap gate: branch-(a) + broken critical_paths aborts non-zero" \
+  "A declared critical path that doesn't resolve must abort the dispatch — bin/dispatch-common.sh."
+assert_contains "$out" "06 Raw_data" "bootstrap gate: critical_paths abort names the offending path" \
+  "The abort message must print the declared path that failed to resolve — bin/dispatch-common.sh."
+assert_contains "$out" "critical_paths in projects/gate-demo.yml" "bootstrap gate: critical_paths abort points at the manifest field" \
+  "The abort message must name critical_paths in the manifest so the operator can fix it — bin/dispatch-common.sh."
+
+# state 8 — declared critical_paths take precedence over the generic default: even a
+# branch-(b) worktree (no own script) with a healthy raw_resolved must ABORT when a
+# declared critical path is missing. Guards against the gate silently ignoring the field.
+g_wt="$GROOT/wt-cp-precedence"; mkdir -p "$g_wt"
+g_raw="$GROOT/raw-cp"; mkdir -p "$g_raw"; : >"$g_raw/input.csv"
+rc=0; out="$(bootstrap_worktree_data "$g_wt" "$g_raw" "$G_CLONE" "" gate-demo "never-created-dir" 2>&1)" || rc=$?
+assert_ne 0 "$rc" "bootstrap gate: declared critical_paths override the data/raw default" \
+  "critical_paths must be asserted even when raw_resolved is healthy — bin/dispatch-common.sh."

@@ -103,6 +103,7 @@ WORKTREES_DIR="$(expand "$(yml worktrees_dir)")"
 RAW_RESOLVED="$(expand "$(yml raw_resolved)")"
 DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 OUTPUT_PATHS="$(yml_list output_paths)"
+CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
 
 BRANCH="issue-$ISSUE"
 WORKTREE="$WORKTREES_DIR/$BRANCH"
@@ -196,7 +197,7 @@ fi
 # bootstrap_worktree_data (dispatch-common.sh) so both provision identical links —
 # see that function for the full rationale (issue #25: the DROPBOX_PROJ derivation
 # that doubled california-pesticides' path segment, and the missing --worker flag).
-bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG"
+bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS"
 
 # Ledger: local execution state GitHub doesn't record. `pid` lets the digest
 # tell a live worker from a crashed one; `status` (dispatched/done/failed) is
