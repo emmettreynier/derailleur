@@ -92,8 +92,10 @@ verdict-wins-over-status / dead-pid=unknown / live=pending, plus malformed/no-ar
 rejection); `tmux-run.sh` name/log derivation, `--tail` validation, `{{SLUG}}` wiring,
 and (when `tmux` is present) the atomic-create mutex; the `scheduled_repos` allow-list
 reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` on an
-empty sandbox (the bash-3.2 regression net); and `ledger-prune.sh` dead-pid pruning.
-If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
+empty sandbox (the bash-3.2 regression net); `ledger-prune.sh` dead-pid pruning; and
+the `bootstrap_worktree_data` critical raw-link gate across all four states
+(missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
+manifest → exempt). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
 and is byte-identical before/after.
 
 **What the online tier covers:** `board-digest.sh` emits a digest against the live
