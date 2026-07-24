@@ -347,6 +347,74 @@ else
   pass "tmux-run: atomic mutex — created then exists-alive, exactly one session, durable log written"
 fi
 
+# --- (g) bootstrap_worktree_data critical raw-link gate (issue #35) -----------
+# The host-side gate that hard-fails a dispatch when a data-backed worktree's critical
+# data/raw symlink doesn't resolve — so a worker/checker never computes on missing
+# inputs and exits 0 (the #25 silent failure). bootstrap_worktree_data lives in
+# dispatch-common.sh and is called by BOTH launchers, so one test covers worker+checker.
+# Pure and offline: source the function, call it against throwaway worktree fixtures for
+# all four states, assert exit code + message. No network, nothing dispatched, nothing spent.
+# shellcheck source=/dev/null
+. "$ORCH/bin/dispatch-common.sh"
+
+GROOT="$TMPROOT/bootstrap"; mkdir -p "$GROOT"
+G_CLONE="$GROOT/clone"; mkdir -p "$G_CLONE"       # stand-in working clone (a distinct real path)
+
+# state 1 — missing/broken: raw_resolved points at a path that doesn't exist, so the
+# default-template branch creates a DANGLING data/raw symlink. The gate must abort
+# non-zero, naming the unresolved path AND the manifest to fix.
+g_wt="$GROOT/wt-broken"; mkdir -p "$g_wt"
+g_raw="$GROOT/nonexistent-raw"                     # deliberately never created
+rc=0; out="$(bootstrap_worktree_data "$g_wt" "$g_raw" "$G_CLONE" "" gate-demo 2>&1)" || rc=$?
+[ "$rc" -ne 0 ] || fail \
+  "bootstrap gate did NOT abort on a broken data/raw symlink (expected non-zero, got $rc)." \
+  "bootstrap_worktree_data must return 1 when the critical raw link doesn't resolve — bin/dispatch-common.sh."
+printf '%s' "$out" | grep -qF "$g_raw" || fail \
+  "bootstrap gate aborted but did not name the unresolved path ($g_raw)." \
+  "The abort message must print the raw path that failed to resolve — bin/dispatch-common.sh."
+printf '%s' "$out" | grep -qF 'projects/gate-demo.yml' || fail \
+  "bootstrap gate aborted but did not point at projects/<slug>.yml." \
+  "The abort message must name the manifest so the operator can fix raw_resolved."
+pass "bootstrap gate: missing/broken data/raw → non-zero abort naming the path + manifest"
+
+# state 2 — populated: a real, non-empty raw dir; dispatch proceeds (exit 0), the link
+# gets created, and there is no new abort output.
+g_wt="$GROOT/wt-pop"; mkdir -p "$g_wt"
+g_raw="$GROOT/raw-pop"; mkdir -p "$g_raw"; : >"$g_raw/input.csv"
+rc=0; out="$(bootstrap_worktree_data "$g_wt" "$g_raw" "$G_CLONE" "" gate-demo 2>&1)" || rc=$?
+[ "$rc" -eq 0 ] || fail \
+  "bootstrap gate aborted on a real, populated data/raw (expected 0, got $rc): $out" \
+  "A populated raw tree must pass the gate cleanly — bin/dispatch-common.sh."
+[ -d "$g_wt/data/raw" ] || fail \
+  "bootstrap did not create the data/raw link for a populated raw tree." \
+  "The default-template branch should symlink data/raw -> raw_resolved."
+pass "bootstrap gate: populated data/raw → exit 0, link created, proceeds"
+
+# state 3 — empty: a real but empty raw dir; dispatch proceeds (exit 0, no abort) AND
+# prints a single-line informational note (a legit-empty raw tree needs no .gitkeep).
+g_wt="$GROOT/wt-empty"; mkdir -p "$g_wt"
+g_raw="$GROOT/raw-empty"; mkdir -p "$g_raw"
+rc=0; out="$(bootstrap_worktree_data "$g_wt" "$g_raw" "$G_CLONE" "" gate-demo 2>&1)" || rc=$?
+[ "$rc" -eq 0 ] || fail \
+  "bootstrap gate aborted on a real but EMPTY data/raw (expected 0 — legit-empty raw needs no .gitkeep, got $rc)." \
+  "An empty-but-resolving raw tree must proceed, not abort — bin/dispatch-common.sh."
+printf '%s' "$out" | grep -qiF 'empty' || fail \
+  "bootstrap gate proceeded on an empty raw tree but printed no informational note." \
+  "An empty raw tree should proceed AND print a single-line note that it is empty."
+pass "bootstrap gate: empty data/raw → exit 0 + informational note (no abort)"
+
+# state 4 — code-only: raw_resolved == working_clone (a self-hosting manifest). No
+# data/raw link is scaffolded and the gate must NOT fire.
+g_wt="$GROOT/wt-codeonly"; mkdir -p "$g_wt"
+rc=0; out="$(bootstrap_worktree_data "$g_wt" "$G_CLONE" "$G_CLONE" "" gate-demo 2>&1)" || rc=$?
+[ "$rc" -eq 0 ] || fail \
+  "bootstrap gate fired on a code-only manifest (raw_resolved == working_clone; expected 0, got $rc)." \
+  "The gate must skip when raw_resolved resolves to the working clone — bin/dispatch-common.sh."
+[ ! -e "$g_wt/data/raw" ] || fail \
+  "bootstrap created a data/raw link for a code-only manifest (should scaffold none)." \
+  "raw_resolved == working_clone must skip the data/raw scaffold entirely."
+pass "bootstrap gate: code-only (raw_resolved == working_clone) → exit 0, no link, gate skipped"
+
 # --- real conf, if present: validate the operator's ACTUAL identity (offline) --
 # Deterministic and read-only — sourcing only reads the file. This is what proves
 # the maintainer's own conf actually passes the guard, not just the temp fixtures.

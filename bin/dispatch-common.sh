@@ -215,14 +215,43 @@ bootstrap_worktree_data() {
     if [ "$ss_rc" -ne 0 ]; then
       echo "⚠ setup-symlinks.sh exited $ss_rc — $slug worktree may be missing data symlinks." >&2
     elif printf '%s\n' "$ss_out" | grep -qE '^[[:space:]]*(SKIP|ERROR)\b'; then
-      echo "⚠ setup-symlinks.sh could not create every link (SKIP/ERROR above) — the $slug" >&2
-      echo "  worktree is missing data symlinks; a stage that reads them will fail at run" >&2
-      echo "  time. Check dropbox_proj / raw_resolved in projects/$slug.yml (issue #25:" >&2
-      echo "  this used to fail silently — an all-SKIP run still exits 0)." >&2
+      # DEMOTED (issue #35): a SKIP/ERROR here is often a legitimately-optional tree
+      # (figures, usrds-proposal), so this is a quiet one-line note rather than the old
+      # scary multi-line block that risked alert-fatigue. The CRITICAL data/raw link is
+      # now hard-gated below — that gate, not this warning, is what stops the #25 silent
+      # failure (an all-SKIP run computing on missing inputs and exiting 0).
+      echo "note: setup-symlinks.sh reported SKIP/ERROR for one or more (optional) links (see output above)." >&2
     fi
   elif [ -n "$raw_resolved" ] && [ "$raw_real" != "$clone_real" ]; then
     mkdir -p "$worktree/data/results"
     ln -sfn "$raw_resolved" "$worktree/data/raw"
+  fi
+
+  # ── Critical raw-data link gate (issue #35 — defense-in-depth for #25) ─────────
+  # A worker/checker must NEVER start against a worktree whose critical data/raw link
+  # didn't resolve, or it computes on missing inputs and exits 0 (the #25 silent
+  # failure). This is a mechanical host-side stop: both launchers run under
+  # `set -euo pipefail`, so a non-zero return here aborts the dispatch BEFORE `claude`
+  # is spawned. It only reads/stats paths — no writes under the raw tree. `--dry-run`
+  # never reaches here (the dry-run block in each launcher exits before bootstrap runs).
+  #
+  # Skip when there is no distinct raw tree to assert: no raw_resolved configured, or a
+  # CODE-ONLY manifest whose raw_resolved resolves to the working clone itself
+  # (raw_real == clone_real — the same case the bootstrap branch above skips).
+  if [ -z "$raw_resolved" ] || { [ -n "$raw_real" ] && [ "$raw_real" = "$clone_real" ]; }; then
+    return 0
+  fi
+  local raw_link="$worktree/data/raw"
+  if [ ! -d "$raw_link" ]; then          # missing, or a symlink whose target doesn't resolve
+    local raw_target; raw_target="$(readlink "$raw_link" 2>/dev/null || echo "$raw_resolved")"
+    echo "✗ dispatch aborted: the worktree's critical raw-data link does not resolve to a directory:" >&2
+    echo "    $raw_link -> ${raw_target:-<missing>}" >&2
+    echo "  A worker/checker would compute on missing inputs and exit 0 (issue #25/#35)." >&2
+    echo "  Fix raw_resolved (or the raw tree it points at) in projects/$slug.yml." >&2
+    return 1
+  fi
+  if [ -z "$(ls -A "$raw_link" 2>/dev/null)" ]; then
+    echo "note: raw tree $raw_link resolves but is empty — proceeding (a legitimately-empty raw tree needs no .gitkeep)."
   fi
   return 0
 }
