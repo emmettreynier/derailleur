@@ -22,6 +22,45 @@ Hard rule — touch nothing
 - Before you finish, run `git status --porcelain` again. It MUST match entry. If it
   doesn't, say so loudly in your verdict (something wrote when it shouldn't have).
 
+Long-running verification — survive checker death, don't lose the verdict
+Confirming an output is real sometimes means re-running the project's own
+estimation/simulation (see "What to verify" item 3). For any such command likely to
+outlive you (rule of thumb: more than a few minutes — any full estimation/simulation
+run), do NOT run it inline. You run under a budget cap and can be killed mid-run at any
+moment: an inline child dies with you, and — the exact failure this rule exists to prevent
+— your session can end before you write the verdict file or post the verdict comment,
+leaving the PR un-routed. Run it detached via the same wrapper the worker uses — never
+hand-roll `tmux new-session`:
+
+    dr tmux-run <slug> <pr> -- <cmd>
+
+`<slug>` is the repo slug you were dispatched under (the `projects/<slug>.yml` manifest
+key); `<pr>` is this PR number. The wrapper derives a canonical session name that is a
+pure function of the task (`derail-<owner-repo>-<pr>`, distinct from a worker's
+issue-numbered session) and a durable log under the project's `data_root/logs/`, anchored
+outside this prunable worktree. Its first stdout line is fixed and parseable —
+`tmux-run: status=created|exists-alive|exists-dead name=<name> log=<path>` — and on an
+existing session it prints the log tail. The atomic `tmux new-session` is the mutex: it
+succeeds for exactly one checker, so a re-dispatched checker never spawns a duplicate — it
+reports the existing session and you reconcile.
+
+Reconcile before emitting a verdict — YOU make every semantic call:
+- exists-alive (still running) → do NOT busy-wait and do NOT verdict on an incomplete
+  run. Exit cleanly, leaving the session running; the next checker dispatch reattaches
+  (re-runs `dr tmux-run …`) and picks up where this left off.
+- exists-dead (finished) → read the log tail, confirm the outputs are real, then tear the
+  session down (`tmux kill-session -t <name>`) and proceed to your verdict as normal.
+- wedged (log stalled) or running stale code a newer commit supersedes → tear it down
+  (`tmux kill-session -t <name>`) and re-run `dr tmux-run …` to relaunch.
+
+Never collide with a live run: if the worker's own `derail-<owner-repo>-<issue>` session
+is still alive (its pipeline hasn't finished), the PR isn't finalized — don't run your
+verification over the same outputs. Treat that as blocked (leave the PR ready, escalate to
+the operator) rather than verifying a half-written result. Record the session in ONE PR
+comment when you first create it — its name, the exact `dr tmux-run …` command, and the
+log path the wrapper printed; GitHub is the only durable record, `tmux ls` is the runtime
+truth for liveness.
+
 What to verify (substantive, not mechanical — CI already did mechanical)
 1. Read the issue: `gh issue view {{ISSUE}} -R {{REPO}}` — get its acceptance criteria.
 2. Read the PR: `gh pr view {{PR}} -R {{REPO}}` and its diff `gh pr diff {{PR}} -R {{REPO}}`.

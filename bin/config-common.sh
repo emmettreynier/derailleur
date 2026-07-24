@@ -44,6 +44,16 @@ fi
 
 export OPERATOR_NAME GITHUB_HANDLE PR_OWNER LAUNCHD_LABEL BOARD_PROJECT
 
+# --- optional per-operator settings ------------------------------------------
+# ORCHESTRATOR_MODEL — the model the HEADLESS/autonomous orchestrator boots on
+# (orchestrator-cycle.sh's `claude -p … --model`). Optional and deliberately NOT
+# part of the required-identity guard above: its absence must never fail the guard
+# or the test suite. Default `sonnet` when unset/blank so orchestrator-cycle.sh can
+# resolve MODEL env → ORCHESTRATOR_MODEL (conf) → sonnet. Does NOT touch the
+# interactive launcher (launch-orchestrator.sh stays on the session's model).
+ORCHESTRATOR_MODEL="${ORCHESTRATOR_MODEL:-sonnet}"
+export ORCHESTRATOR_MODEL
+
 # --- per-repo autonomous-dispatch allow-list ---------------------------------
 # state/scheduled-repos lists the slugs the AUTONOMOUS loop (orchestrator-cycle.sh,
 # whether cron- or hand-triggered) is allowed to dispatch on — one slug per line,

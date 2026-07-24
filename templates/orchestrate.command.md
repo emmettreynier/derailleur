@@ -10,7 +10,7 @@ It registers no hooks and changes no default session behavior anywhere.
 ---
 description: Human-gated interactive orchestrator — load board state, propose worker/checker dispatches, act only on your explicit OK
 argument-hint: "[repo-slug]  (omit = whole board; e.g. solar-income = that repo)"
-allowed-tools: Bash(dr board-digest:*), Bash(dr launch-worker:*), Bash(dr launch-checker:*), Bash(dr schedule status:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh project item-list:*), Monitor
+allowed-tools: Bash(dr board-digest:*), Bash(dr launch-worker:*), Bash(dr launch-checker:*), Bash(dr watch-dispatch:*), Bash(dr schedule status:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh project item-list:*), Monitor
 ---
 
 You are acting as the operator's **human-gated interactive orchestrator** for their
@@ -42,10 +42,15 @@ research work, from whatever repo this session is running in. Scope: `$ARGUMENTS
   the operator" bucket that needs their input. Then **stop and wait for an
   explicit "go"** before running any `launch-*` command. Never dispatch
   autonomously, and never merge — the human merge gate is theirs alone.
-- **After you dispatch, watch automatically.** The instant a `launch-*` runs (not
-  `--dry-run`), begin watching those exact item(s) to terminal state with no
-  further prompt — `Monitor` is granted for this. Follow the brief's "After you
-  dispatch" section: poll local signals, report each item's outcome as it lands.
+- **Fire the approved batch in ONE turn, then watch automatically.** On "go",
+  dispatch every approved `launch-*` in a single turn (parallel tool calls) and arm
+  the watch in that same turn — do not serialize launch → confirm → launch, and do
+  NOT add a separate "did it launch?" step (the launcher's synchronous stdout is the
+  confirmation). Then watch those exact item(s) to terminal state with no further
+  prompt: `Monitor` wraps `dr watch-dispatch` (both granted) — never monitor the
+  detached `launch-*` command itself. Follow the brief's "After you dispatch" and
+  "tmux-aware reconciliation" sections: poll local signals, report each outcome as it
+  lands, and never dispatch a checker into a worktree with a live tmux session.
 - If a candidate is borderline or under-specified, dig in with `gh issue view <n>
   -R <owner/repo> --comments` before proposing; if it stays under-specified,
   recommend `needs-definition` rather than inventing a spec.

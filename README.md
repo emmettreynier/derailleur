@@ -218,8 +218,9 @@ loads board state and proposes what to dispatch, acting only on your explicit OK
 Rendered into `~/.claude/commands/` by `install.sh` (the one `~/.claude/` carve-out).
 It **proposes, then dispatches workers and checkers only after you confirm** — never
 autonomously, and it never merges. Its tools are scoped to the board digest, the two
-launchers, read-only `gh`, and the `Monitor` tool (so it can watch the workers/checkers
-it dispatched to completion without blocking your session). For a session booted from
+launchers, read-only `gh`, and the `Monitor` + `watch-dispatch` tools (so it can watch
+the workers/checkers it dispatched to completion without blocking your session). For a
+session booted from
 this checkout with the digest pre-injected (same posture), use
 `dr launch-orchestrator` instead.
 
@@ -236,7 +237,7 @@ Tunable by env var, e.g. `WORKER_BUDGET=6 dr orchestrator-cycle`:
 |---|---|---|
 | `CAP` | `2` | Max workers in flight at once (tied to your review bandwidth, not CPU). |
 | `BUDGET` | `2.00` | Orchestrator session budget (USD). |
-| `MODEL` | `sonnet` | Orchestrator session model. It only reads the digest and routes, so it's pinned cheap — and pinned at all, so a cycle never inherits whatever expensive model your interactive sessions default to. |
+| `MODEL` | `sonnet` | Orchestrator session model. It only reads the digest and routes, so it's pinned cheap — and pinned at all, so a cycle never inherits whatever expensive model your interactive sessions default to. Resolution: `MODEL` env → `ORCHESTRATOR_MODEL` in `orchestrator.conf` → `sonnet`, so set a persistent per-operator default in the conf and still override per-run with the env var. |
 | `WORKER_BUDGET` | `10.00` | Per-worker session budget (USD). |
 | `CHECKER_BUDGET` | `3.00` | Per-checker session budget (USD). |
 | `CHECKER_LIMIT` | `4` | Max checker rounds per review generation before escalating to `needs-input`. |

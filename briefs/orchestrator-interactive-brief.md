@@ -1,6 +1,6 @@
 <!--
 Interactive orchestrator brief — the shared role layer for the HUMAN-GATED
-orchestrator fronts. Rendered verbatim (no {{TOKENS}}) by BOTH:
+orchestrator fronts. Rendered verbatim (no token substitution) by BOTH:
   - bin/launch-orchestrator.sh   (interactive session booted from this checkout)
   - the /orchestrate slash command (install-rendered into ~/.claude/commands/)
 so there is exactly one copy of this text. Edit freely; keep it token-free so
@@ -84,6 +84,22 @@ session context works identically:
     dr launch-worker  <slug> <issue#> [--dry-run] [--budget USD]   # land an issue
     dr launch-checker <slug> <pr#>    [--dry-run] [--budget USD]   # review a ready PR
 
+### Fire the whole approved batch in ONE turn — do not serialize
+
+Once the operator says "go" for a batch, dispatch **every** approved launch in a
+**single turn, as parallel tool calls**, and arm the watch (below) **in that same
+turn**. Do NOT go launch → observe → launch → observe → monitor: that
+one-at-a-time, confirm-between-each pattern is pure LLM-turn dead weight and turns a
+~2-second dispatch into minutes.
+
+Each `dr launch-*` runs **detached** and returns **synchronously** — its own stdout
+(`Dispatching worker … / pid N (detached, own session)`) IS the confirmation that
+the dispatch started. So after a launch you must **NOT** insert any separate
+"did it launch?" step — no extra `board-digest`, no `gh` peek, no standalone
+verify-it-started turn. The launcher already told you it started; there is nothing
+left to confirm. Your very next action, in the same turn as the launches, is arming
+the watch on the dispatched work.
+
 ## After you dispatch: watch to terminal state (do this automatically)
 
 The instant you run a real `dr launch-worker` / `dr launch-checker` (not
@@ -123,6 +139,13 @@ Set `persistent: true` (a worker can outlast the default timeout); the script po
 about every 15s (tune with `--interval N`) and exits itself once all items are
 terminal.
 
+**Monitor `watch-dispatch`, never the `launch-*` command.** The thing worth watching
+is the worker/checker running to completion — which is exactly what `watch-dispatch`
+tracks (via the ledger/verdict signals). The `dr launch-*` command itself is
+detached and returns in ~1s; wrapping *it* in a `Monitor` would just fire the instant
+the launch script exits, telling you the dispatch started (which you already knew) and
+nothing about whether the work finished. Point the one `Monitor` at `watch-dispatch`.
+
 **If `Monitor` is NOT in your toolset,** run the same script **blocking** — identical
 terminal-state semantics; the only cost is that you can't take operator input until it
 returns.
@@ -138,6 +161,26 @@ per event — never per tick:
   escalation, the operator's court;
 - any `interrupted-*` / `unknown` → say so plainly (the launcher already pushed any
   stranded commits and commented on the issue); a redispatch resumes it.
+
+## tmux-aware reconciliation — `done` is not "finalized"
+
+Workers run multi-minute jobs (R estimations, simulations) in **detached tmux**
+sessions named `derail-<owner>-<repo>-<issue>` (`/`→`-` in the owner/repo), with a
+durable log outside the worktree. Because a headless worker **exits-to-wait** while
+its detached tmux job is still running, the ledger can flip `status=done` while the
+tmux run is *still live or unreconciled* and the PR is not finalized (still a draft,
+session not torn down). So:
+
+1. **`status=done` ≠ work finalized.** Before treating a worker terminal as complete,
+   confirm the deliverables are committed and the PR is **ready/mergeable, not draft**
+   (the `board-digest.sh` / `gh pr view` you already run per terminal event shows this).
+2. **Check for a possibly-live run:** `tmux ls`, match the
+   `derail-<owner>-<repo>-<issue>` name convention, and read the durable log tail.
+3. **Collision rule:** **never dispatch a checker (or another worker) into a worktree
+   whose tmux session is `exists-alive`.** Two pipelines writing the same
+   `figures/`/`results/` will corrupt each other. Reconcile first — a resume worker
+   verifies the run and tears the session down — *then* dispatch the checker. When in
+   doubt, surface the live session to the operator rather than dispatching into it.
 
 ## Coordinating with the autonomous scheduler
 
