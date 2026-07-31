@@ -97,19 +97,26 @@ def issue_comments(repo, num):
         pass
     return None  # unknown -> don't touch
 
+# Both no-clean-finish leads finalize_dispatch can post (dispatch-common.sh). They
+# share ONE cap: from the operator's side "the worker was cut off" and "the worker
+# exited without finalizing" are the same problem — an attempt that produced no
+# finished work — and an exit-to-wait used to be invisible to WORKER_LIMIT entirely,
+# so a wedged tmux job re-dispatched every cycle forever (issue #40).
+NO_FINISH_LEADS = ("**Worker interrupted:", "**Worker incomplete:")
+
 def trailing_interrupted_count(repo, num):
-    """How many `**Worker interrupted:` comments (posted by finalize_dispatch, see
-    dispatch-common.sh) sit at the END of the issue's comment history with nothing
-    else after them. Any intervening comment (a milestone, a checker verdict, a
-    human reply) resets it — the same 'per generation' idea CHECKER_LIMIT uses for
-    verdict comments, so a genuinely-progressing issue never gets penalized for an
-    interruption two rounds ago."""
+    """How many `**Worker interrupted:` / `**Worker incomplete:` comments (posted by
+    finalize_dispatch, see dispatch-common.sh) sit at the END of the issue's comment
+    history with nothing else after them. Any intervening comment (a milestone, a
+    checker verdict, a human reply) resets it — the same 'per generation' idea
+    CHECKER_LIMIT uses for verdict comments, so a genuinely-progressing issue never
+    gets penalized for an interruption two rounds ago."""
     comments = issue_comments(repo, num)
     if comments is None:
         return None
     n = 0
     for c in reversed(comments):
-        if (c.get("body") or "").startswith("**Worker interrupted:"):
+        if (c.get("body") or "").startswith(NO_FINISH_LEADS):
             n += 1
         else:
             break
@@ -120,8 +127,9 @@ def escalate_needs_input(repo, num, n, limit):
         subprocess.run(["gh", "issue", "edit", str(num), "-R", repo,
                          "--add-label", "needs-input"], capture_output=True, timeout=15)
         subprocess.run(["gh", "issue", "comment", str(num), "-R", repo, "--body",
-            f"🔁 Worker limit reached: {n} interrupted attempts in a row without "
-            f"reaching `ready` (limit {limit}). Escalating to @{os.environ.get('GITHUB_HANDLE','')} — the "
+            f"🔁 Worker limit reached: {n} attempts in a row without a clean finish "
+            f"(interrupted or incomplete), never reaching `ready` "
+            f"(limit {limit}). Escalating to @{os.environ.get('GITHUB_HANDLE','')} — the "
             f"issue may be too large for one worker budget, or something is "
             f"silently blocking progress."], capture_output=True, timeout=15)
     except Exception:
@@ -137,7 +145,7 @@ def escalate_needs_input(repo, num, n, limit):
 # the operator instead of burning another worker budget on it.
 WORKER_LIMIT = int(os.environ.get("WORKER_LIMIT", "4"))
 
-def handle_interrupted(repo, num):
+def handle_no_clean_finish(repo, num):
     labs = issue_labels(repo, num)
     if labs is None or labs & {"needs-input", "checked-pass"}:
         return None  # already escalated or passed elsewhere — leave it alone
@@ -171,12 +179,13 @@ for ln in lines:
         reasons.append("issue closed")
     if pid_dead(pid):
         reasons.append(f"pid {pid} dead")
-    # Surface a dispatch that ended interrupted (rate limit / budget / crash) as it's
-    # pruned — the launcher records this in `status`; without it the cutoff is silent.
-    if reasons and status and status.startswith("interrupted"):
+    # Surface a dispatch that did not finish cleanly as it's pruned — interrupted
+    # (rate limit / budget / crash) or incomplete (exited without finalizing, #40).
+    # The launcher records both in `status`; without this the cutoff is silent.
+    if reasons and status and status.startswith(("interrupted", "incomplete")):
         reasons.append(f"⚠ was {status} — check worktree for unpushed work")
         if not is_checker:
-            note = handle_interrupted(repo, num)
+            note = handle_no_clean_finish(repo, num)
             if note:
                 reasons.append(note)
     (pruned if reasons else keep).append((ln, reasons) if reasons else ln)
