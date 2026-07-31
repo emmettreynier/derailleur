@@ -92,7 +92,10 @@ verdict-wins-over-status / dead-pid=unknown / live=pending, plus malformed/no-ar
 rejection); `tmux-run.sh` name/log derivation, `--tail` validation, `{{SLUG}}` wiring,
 and (when `tmux` is present) the atomic-create mutex; the `scheduled_repos` allow-list
 reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` on an
-empty sandbox (the bash-3.2 regression net); `ledger-prune.sh` dead-pid pruning; and
+empty sandbox (the bash-3.2 regression net); `ledger-prune.sh` dead-pid pruning; the `Agent`
+(subagent) deny in all three *unattended* dispatches — worker + checker asserted on the
+real `--dry-run`, the cycle orchestrator at the source level — together with the
+human-present `launch-orchestrator.sh` staying deliberately unrestricted; and
 the `bootstrap_worktree_data` critical raw-link gate across all four states
 (missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
 manifest → exempt). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
