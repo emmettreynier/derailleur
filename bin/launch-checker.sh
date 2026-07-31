@@ -135,6 +135,13 @@ TASK="Check ready PR #$PR in $REPO (closes issue #$ISSUE). Verify it against the
 # --- assemble the (guarded, no-mutate) invocation -----------------------------
 # Same guard env + deny-hook as a worker, PLUS --disallowedTools strips every
 # code-mutating tool: the checker can Read + run Bash (tests/gh) but cannot Edit/Write.
+# That same list denies Agent — delegation escapes the protocol layer: a subagent gets
+# no brief (no verdict-JSON contract, no routing vocabulary), is not bound by the
+# session's Stop-hook exit contract (it fires SubagentStop), and spends against this
+# session's --max-budget-usd. Blanket deny, not an enumerated one: "deny all but
+# Explore" is not expressible, and a named list fails OPEN the next time an agent
+# lands in ~/.claude/agents/. Keep it in this one flag — do not add a second
+# --disallowedTools, and do not "simplify" Agent out of it. (issue #45)
 build_cmd() {
   # ORCH_LOGS_DIR + its --add-dir let the checker write its verdict JSON to the
   # orchestrator's own logs/ (runtime state, never project raw data) even when a
@@ -146,7 +153,7 @@ build_cmd() {
         --add-dir "$WORKTREE"
         --add-dir "$RAW_RESOLVED"
         --add-dir "$ORCH/logs"
-        --disallowedTools Edit Write NotebookEdit
+        --disallowedTools Edit Write NotebookEdit Agent
         --max-budget-usd "$BUDGET"
         --append-system-prompt "$BRIEF"
         --fallback-model "$FALLBACK"
@@ -163,6 +170,7 @@ if [ "$DRY" = 1 ]; then
 #   worktree      : $WORKTREE   (branch: $BRANCH)
 #   raw (RO)      : $RAW_RESOLVED   <- --add-dir + deny-hook protected
 #   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)
+#                   Agent DISABLED (no subagents: delegation escapes brief + Stop hook)
 #   verdict file  : $VERDICT_FILE   <- $ORCH/logs writable (carveout + --add-dir)
 #   budget cap    : \$$BUDGET   fallback: $FALLBACK
 #   log           : $LOG

@@ -69,6 +69,14 @@ fi
 # break the operator's ability to read/inspect during a session. The autonomous
 # cycle stays untouched (separate brief + one-shot `claude -p`, which exits before
 # Monitor events could arrive).
+#
+# Subagents (`Agent`) are likewise NOT denied here, and that is deliberate (issue #45).
+# The three UNATTENDED dispatches — launch-worker.sh, launch-checker.sh, and the headless
+# cycle in orchestrator-cycle.sh — all pass `--disallowedTools … Agent`, because a
+# delegated subagent escapes the brief, the Stop-hook exit contract, and the session's
+# budget with nobody watching. This session is human-present: the operator sees every
+# delegation, can interrupt it, and owns the spend, so the reasons don't apply. Denying
+# Agent here would only narrow what the operator can do interactively. DON'T add it.
 ORCHESTRATOR=1 exec claude \
   --settings "$SETTINGS_JSON" \
   --append-system-prompt "$BRIEF" \

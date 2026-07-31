@@ -145,11 +145,20 @@ TASK="Work issue #$ISSUE in $REPO. Read it with \`gh issue view $ISSUE -R $REPO 
 # --- assemble the (guarded) invocation ----------------------------------------
 # env-prefix exports ORCH_MANIFEST so the deny-hook subprocess can read raw_paths.
 build_cmd() {
+  # --disallowedTools Agent: delegation escapes the protocol layer. A subagent runs
+  # with NO brief (briefs/worker-brief.md never reaches it — no PR contract, no
+  # results-summary, no escalation vocabulary), NO exit guard (worker-stop-guard.sh
+  # binds the main session's Stop; a subagent fires SubagentStop instead), and NO
+  # separate budget (its spend lands on this session's --max-budget-usd). Blanket
+  # deny, not an enumerated one: "deny all but Explore" is not expressible, and a
+  # named list fails OPEN the next time an agent lands in ~/.claude/agents/.
+  # Keep the deny — do not "simplify" it away. (issue #45)
   CMD=( env "ORCH_MANIFEST=$MANIFEST" claude -p "$TASK"
         --permission-mode bypassPermissions
         --settings "$SETTINGS_JSON"
         --add-dir "$WORKTREE"
         --add-dir "$RAW_RESOLVED"
+        --disallowedTools Agent
         --max-budget-usd "$BUDGET"
         --append-system-prompt "$BRIEF"
         --fallback-model "$FALLBACK"
@@ -166,6 +175,7 @@ if [ "$DRY" = 1 ]; then
 #   worktree      : $WORKTREE   (branch: $BRANCH)
 #   raw (RO)      : $RAW_RESOLVED   <- --add-dir + deny-hook protected
 #   outputs       : $OUTPUT_PATHS
+#   tools         : Agent DISABLED (no subagents: delegation escapes brief + Stop hook)
 #   deny-hook     : $HOOK   <- injected via --settings (PreToolUse)
 #   stop-hook     : $STOP_HOOK $ISSUE $REPO   <- injected via --settings (Stop): exit-contract guard
 #   budget cap    : \$$BUDGET   fallback: $FALLBACK
