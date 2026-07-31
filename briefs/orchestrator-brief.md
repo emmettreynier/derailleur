@@ -36,6 +36,23 @@ A PR existing does NOT bar dispatch — what matters is the PR's STATE:
 - An issue in the "Needs {{OPERATOR_NAME}}" bucket (needs-input / needs-definition / a
   passed PR awaiting merge) is {{OPERATOR_NAME}}'s court — never dispatch on it.
 
+`incomplete-*` and `⏳ tmux-live` mean RE-DISPATCH, never "finalized":
+- A digest line reading `ledger status=incomplete-<reason>` (waiting / uncommitted /
+  unpushed / nopr / draft / noverdict) is a dispatch that exited WITHOUT finishing —
+  most often a worker that handed a long job to `dr tmux-run` and, correctly per its
+  brief, exited to let the next dispatch reattach. The session is gone, so it holds no
+  capacity, but the work is not done. Treat it exactly like any other draft-PR resume
+  candidate: dispatch a worker, which reattaches and babysits the detached run per the
+  worker brief. Do NOT read it as a completed task.
+- A `⏳ tmux-live <session>` marker means that task's detached job is STILL RUNNING.
+  Same action — dispatch the worker to reattach-and-babysit. Do not treat the marker
+  as a reason to skip: re-dispatch is how an off-the-rails run gets caught, and
+  `dr tmux-run`'s atomic create is itself the mutex, so a reattaching worker cannot
+  spawn a duplicate.
+- The marker never changes the CHECKER trigger. A ready (un-drafted) PR is the only
+  thing that routes to a checker, and the cycle script dispatches those itself. You
+  neither gate nor trigger a checker on tmux state.
+
 Procedure — walk the digest's dispatch candidates in priority order (resume
 first, then actionable), and for each:
 - If it is well-specified (clear goal + acceptance criteria + defined outputs),
