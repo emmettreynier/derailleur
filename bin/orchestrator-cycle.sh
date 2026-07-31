@@ -266,13 +266,21 @@ BRIEF="$(BRIEF_SLOTS="$SLOTS" BRIEF_SLUGS="$SLUGS" \
 TASK="Run one orchestration cycle. From the injected board digest, dispatch up to $SLOTS worker(s) on well-specified, onboarded issues and handle under-specified ones per your brief. Follow the brief exactly."
 
 # 6. Boot the headless orchestrator (board-only: no Edit/Write; budget-capped) -
+# The one --disallowedTools list below also denies Agent: this cycle is unattended, and
+# delegation escapes the protocol layer — a subagent gets no brief (no dispatch rules, no
+# cap/slot arithmetic), isn't bound by the session's Stop-hook exit contract (it fires
+# SubagentStop), and spends against this session's --max-budget-usd. Blanket deny, not an
+# enumerated one: "deny all but Explore" is not expressible, and a named list fails OPEN
+# the next time an agent lands in ~/.claude/agents/. Keep Agent in this single flag — a
+# second --disallowedTools would be variadic-ambiguous. (issue #45; the human-present
+# bin/launch-orchestrator.sh is deliberately exempt.)
 echo "Booting orchestrator (model $MODEL, budget \$$BUDGET)…"
 ORCHESTRATOR=1 claude -p "$TASK" \
   --settings "$SETTINGS_JSON" \
   --append-system-prompt "$BRIEF" \
   --model "$MODEL" \
   --permission-mode bypassPermissions \
-  --disallowedTools Edit Write NotebookEdit \
+  --disallowedTools Edit Write NotebookEdit Agent \
   --max-budget-usd "$BUDGET" \
   --output-format json \
   | python3 -c 'import sys, json

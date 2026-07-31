@@ -101,7 +101,10 @@ empty sandbox (the bash-3.2 regression net); `ledger-prune.sh` dead-pid pruning 
 split no-clean-finish escalation (trailing `**Worker incomplete: incomplete-waiting`
 comments count against the loose `WORKER_WAIT_LIMIT`; every `**Worker interrupted:` and
 every other incomplete reason against `WORKER_LIMIT`; a mixed run tallies each class
-independently and an intervening reply resets both); and
+independently and an intervening reply resets both); the `Agent`
+(subagent) deny in all three *unattended* dispatches — worker + checker asserted on the
+real `--dry-run`, the cycle orchestrator at the source level — together with the
+human-present `launch-orchestrator.sh` staying deliberately unrestricted; and
 the `bootstrap_worktree_data` critical raw-link gate across all four states
 (missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
 manifest → exempt). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
