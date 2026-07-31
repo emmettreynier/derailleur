@@ -20,16 +20,24 @@ WATCH="$SB/bin/watch-dispatch.sh"
 # 'dispatched' but WITH a written verdict (verdict must win over status); a worker
 # whose pid is dead while status never finalized (=> unknown); and a genuinely live
 # dispatched worker (=> pending, must NOT be terminal).
+#
+# Plus (issue #40) an `incomplete-waiting` worker — terminal, but the work isn't
+# finished, so it must carry the re-dispatch hint — and an `incomplete-noverdict`
+# checker WITH a stale verdict file on disk, where the ledger status must win (it is
+# written after the session exited, so it is the later and more authoritative word).
 cat >"$SB/ledger.md" <<LEDGER
 - #10 | owner/demo | issue-10 | $SB/logs/demo-issue-10.log | pid 1 | dispatched 2026-01-01T00:00:00Z | status done
 - check pr#20 | owner/demo | issue-10 | $SB/logs/demo-pr-20.log | pid $$ | dispatched 2026-01-01T00:00:00Z | status dispatched
 - #30 | owner/demo | issue-30 | $SB/logs/demo-issue-30.log | pid 99999999 | dispatched 2026-01-01T00:00:00Z | status dispatched
 - #40 | owner/demo | issue-40 | $SB/logs/demo-issue-40.log | pid $$ | dispatched 2026-01-01T00:00:00Z | status dispatched
+- #50 | owner/demo | issue-50 | $SB/logs/demo-issue-50.log | pid 1 | dispatched 2026-01-01T00:00:00Z | status incomplete-waiting
+- check pr#60 | owner/demo | issue-50 | $SB/logs/demo-pr-60.log | pid 1 | dispatched 2026-01-01T00:00:00Z | status incomplete-noverdict
 LEDGER
 printf '{"verdict":"checked-pass"}\n' >"$SB/logs/demo-pr-20-verdict.json"
+printf '{"verdict":"pass"}\n'         >"$SB/logs/demo-pr-60-verdict.json"
 
 rc=0
-wd_out="$("$WATCH" --dry-run demo#10 demo#pr20 demo#30 demo#40 2>&1)" || rc=$?
+wd_out="$("$WATCH" --dry-run demo#10 demo#pr20 demo#30 demo#40 demo#50 demo#pr60 2>&1)" || rc=$?
 assert_rc 0 "$rc" "watch-dispatch --dry-run exits 0 on a valid fixture" \
   "The script should classify each item and exit 0 in --dry-run; see bin/watch-dispatch.sh."
 assert_matches "$wd_out" 'demo#10 \(worker\) -> done' "status=done worker classified 'done'" \
@@ -40,6 +48,18 @@ assert_matches "$wd_out" 'demo#30 \(worker\) -> unknown' "dead-but-unfinalized p
   "The silence-is-not-success guard (pid liveness) is broken in bin/watch-dispatch.sh."
 assert_matches "$wd_out" 'demo#40 \(worker\) -> pending' "live, still-dispatched worker classified 'pending'" \
   "A running dispatch must NOT be classified terminal — check the status/pid logic."
+assert_matches "$wd_out" 'demo#50 \(worker\) -> incomplete-waiting \(re-dispatch required\)' \
+  "incomplete-waiting worker is terminal AND carries the re-dispatch hint" \
+  "incomplete-* means the dispatch ended without finalizing — terminal_note must flag it (issue #40)."
+assert_matches "$wd_out" 'demo#pr60 \(checker\) -> incomplete-noverdict \(re-dispatch required\)' \
+  "incomplete-noverdict checker wins over a stale verdict file on disk" \
+  "The ledger status is written after the session exits, so incomplete-* outranks the verdict file."
+assert_not_contains "$wd_out" "demo#pr60 (checker) -> pass" \
+  "the stale verdict file does not mask the checker's incomplete status" \
+  "terminal_state must consult the status before the verdict file when the status is incomplete-*."
+assert_not_contains "$wd_out" "demo#10 (worker) -> done (re-dispatch required)" \
+  "a plain 'done' carries no re-dispatch hint" \
+  "terminal_note must fire only for incomplete-* — see bin/watch-dispatch.sh."
 
 # malformed item + no-args each exit 2
 rc=0; "$WATCH" --dry-run bogusitem >/dev/null 2>&1 || rc=$?
