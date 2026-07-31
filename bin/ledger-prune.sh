@@ -97,39 +97,59 @@ def issue_comments(repo, num):
         pass
     return None  # unknown -> don't touch
 
-# Both no-clean-finish leads finalize_dispatch can post (dispatch-common.sh). They
-# share ONE cap: from the operator's side "the worker was cut off" and "the worker
-# exited without finalizing" are the same problem — an attempt that produced no
-# finished work — and an exit-to-wait used to be invisible to WORKER_LIMIT entirely,
-# so a wedged tmux job re-dispatched every cycle forever (issue #40).
+# Both no-clean-finish leads finalize_dispatch can post (dispatch-common.sh). Both are
+# capped — an exit-to-wait used to be invisible to WORKER_LIMIT entirely, so a wedged
+# tmux job re-dispatched every cycle forever (issue #40) — but they are capped
+# SEPARATELY, because their retry cost differs by orders of magnitude:
+#
+#   wait class   `**Worker incomplete: incomplete-waiting` — a babysit handoff. The
+#                brief TELLS the worker to exit while a detached tmux job runs; the
+#                retry reattaches, sees the job running, and exits again for cents.
+#                Loose cap (WORKER_WAIT_LIMIT) so legitimate multi-session progress on
+#                a long run isn't escalated as a malfunction — but still capped, since
+#                exempting it would reopen the very hole #40 closed (a job alive but
+#                never finishing would re-dispatch forever with no backstop).
+#   hard class   every `**Worker interrupted:` (cut off — a full WORKER_BUDGET already
+#                burned) and every OTHER incomplete reason (`uncommitted`, `unpushed`,
+#                `nopr`, `draft` — the session exited having malfunctioned, not having
+#                handed off). Tight cap (WORKER_LIMIT).
+#
+# Classification reads the reason token out of the comment lead and nothing else — no
+# tmux probe, no filesystem timestamps. This script runs at cycle start and stays a pure
+# comment-history reader, so it must not depend on live session state.
 NO_FINISH_LEADS = ("**Worker interrupted:", "**Worker incomplete:")
+WAIT_LEAD_RE = re.compile(r"^\*\*Worker incomplete:\s*(?:incomplete-)?waiting\b")
 
-def trailing_interrupted_count(repo, num):
+def trailing_no_finish_counts(repo, num):
     """How many `**Worker interrupted:` / `**Worker incomplete:` comments (posted by
     finalize_dispatch, see dispatch-common.sh) sit at the END of the issue's comment
-    history with nothing else after them. Any intervening comment (a milestone, a
-    checker verdict, a human reply) resets it — the same 'per generation' idea
-    CHECKER_LIMIT uses for verdict comments, so a genuinely-progressing issue never
-    gets penalized for an interruption two rounds ago."""
+    history with nothing else after them, split into (hard, wait) per the classes above.
+    Any intervening comment (a milestone, a checker verdict, a human reply) resets BOTH
+    — the same 'per generation' idea CHECKER_LIMIT uses for verdict comments, so a
+    genuinely-progressing issue never gets penalized for an interruption two rounds
+    ago."""
     comments = issue_comments(repo, num)
     if comments is None:
         return None
-    n = 0
+    hard = wait = 0
     for c in reversed(comments):
-        if (c.get("body") or "").startswith(NO_FINISH_LEADS):
-            n += 1
-        else:
+        body = c.get("body") or ""
+        if not body.startswith(NO_FINISH_LEADS):
             break
-    return n
+        if WAIT_LEAD_RE.match(body):
+            wait += 1
+        else:
+            hard += 1
+    return hard, wait
 
-def escalate_needs_input(repo, num, n, limit):
+def escalate_needs_input(repo, num, n, limit, knob, what):
     try:
         subprocess.run(["gh", "issue", "edit", str(num), "-R", repo,
                          "--add-label", "needs-input"], capture_output=True, timeout=15)
         subprocess.run(["gh", "issue", "comment", str(num), "-R", repo, "--body",
-            f"🔁 Worker limit reached: {n} attempts in a row without a clean finish "
-            f"(interrupted or incomplete), never reaching `ready` "
-            f"(limit {limit}). Escalating to @{os.environ.get('GITHUB_HANDLE','')} — the "
+            f"🔁 Worker limit reached: {n} {what} in a row, never reaching `ready` "
+            f"(limit {limit}, `{knob}`). Escalating to "
+            f"@{os.environ.get('GITHUB_HANDLE','')} — the "
             f"issue may be too large for one worker budget, or something is "
             f"silently blocking progress."], capture_output=True, timeout=15)
     except Exception:
@@ -142,19 +162,30 @@ def escalate_needs_input(repo, num, n, limit):
 # redispatched every cycle forever. WORKER_LIMIT (mirrors CHECKER_LIMIT) closes
 # that: count consecutive trailing "interrupted" comments (posted by
 # finalize_dispatch on every hard stop) and once the limit is hit, hand it to
-# the operator instead of burning another worker budget on it.
+# the operator instead of burning another worker budget on it. WORKER_WAIT_LIMIT is
+# the same backstop at a looser setting for the cheap wait class (see above).
 WORKER_LIMIT = int(os.environ.get("WORKER_LIMIT", "4"))
+WORKER_WAIT_LIMIT = int(os.environ.get("WORKER_WAIT_LIMIT", "10"))
 
 def handle_no_clean_finish(repo, num):
     labs = issue_labels(repo, num)
     if labs is None or labs & {"needs-input", "checked-pass"}:
         return None  # already escalated or passed elsewhere — leave it alone
-    n = trailing_interrupted_count(repo, num)
-    if n is None:
+    counts = trailing_no_finish_counts(repo, num)
+    if counts is None:
         return None
-    if n >= WORKER_LIMIT:
-        escalate_needs_input(repo, num, n, WORKER_LIMIT)
-        return f"WORKER_LIMIT reached ({n}/{WORKER_LIMIT}) — escalated to needs-input"
+    hard, wait = counts
+    # Each class is tallied independently and escalates on ITS OWN limit; a mixed
+    # trailing run therefore doesn't escalate until one class gets there alone.
+    if hard >= WORKER_LIMIT:
+        escalate_needs_input(repo, num, hard, WORKER_LIMIT, "WORKER_LIMIT",
+                             "interrupted/unfinalized attempts")
+        return f"WORKER_LIMIT reached ({hard}/{WORKER_LIMIT}) — escalated to needs-input"
+    if wait >= WORKER_WAIT_LIMIT:
+        escalate_needs_input(repo, num, wait, WORKER_WAIT_LIMIT, "WORKER_WAIT_LIMIT",
+                             "exit-to-wait attempts (`incomplete-waiting`)")
+        return (f"WORKER_WAIT_LIMIT reached ({wait}/{WORKER_WAIT_LIMIT})"
+                " — escalated to needs-input")
     # Cosmetic only (digest doesn't need it) — keeps the plain GitHub label view
     # legible for a human scanning issues outside the orchestrator's own digest.
     if "resume" not in labs and has_open_pr(repo, num) is True:

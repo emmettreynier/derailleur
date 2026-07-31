@@ -89,16 +89,19 @@ into a brief the way the launchers do); the `derailleur`/`dr` CLI dispatcher
 (`help`/unknown-command/sourced-lib routing, and the subtle symlink resolution back
 to this checkout); `watch-dispatch.sh` terminal-state classification (done /
 verdict-wins-over-status / dead-pid=unknown / live=pending / `incomplete-*` terminal
-with a re-dispatch hint, plus malformed/no-arg rejection); the `dispatch-common.sh`
+with a re-dispatch hint / an `incomplete-waiting` checker reporting a written verdict
+*and* the live session, plus malformed/no-arg rejection); the `dispatch-common.sh`
 completion gate (`tmux_job_state`'s pane-dead liveness and `assert_finalized`'s
 per-role reason battery — including the "finished tmux session still counts as done"
 regression net and the no-false-`incomplete`-on-`gh`-failure guard);
 `tmux-run.sh` name/log derivation, `--tail` validation, `{{SLUG}}` wiring,
 and (when `tmux` is present) the atomic-create mutex; the `scheduled_repos` allow-list
 reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` on an
-empty sandbox (the bash-3.2 regression net); `ledger-prune.sh` dead-pid pruning plus the shared
-`WORKER_LIMIT` escalation (trailing `**Worker interrupted:`/`**Worker incomplete:`
-comments count against one cap; an intervening reply resets it); and
+empty sandbox (the bash-3.2 regression net); `ledger-prune.sh` dead-pid pruning plus the
+split no-clean-finish escalation (trailing `**Worker incomplete: incomplete-waiting`
+comments count against the loose `WORKER_WAIT_LIMIT`; every `**Worker interrupted:` and
+every other incomplete reason against `WORKER_LIMIT`; a mixed run tallies each class
+independently and an intervening reply resets both); and
 the `bootstrap_worktree_data` critical raw-link gate across all four states
 (missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
 manifest → exempt). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
@@ -247,7 +250,8 @@ Tunable by env var, e.g. `WORKER_BUDGET=6 dr orchestrator-cycle`:
 | `WORKER_BUDGET` | `10.00` | Per-worker session budget (USD). |
 | `CHECKER_BUDGET` | `3.00` | Per-checker session budget (USD). |
 | `CHECKER_LIMIT` | `4` | Max checker rounds per review generation before escalating to `needs-input`. |
-| `WORKER_LIMIT` | `4` | Max consecutive interrupted worker attempts before escalating to `needs-input`. |
+| `WORKER_LIMIT` | `4` | Max consecutive worker attempts with no clean finish before escalating to `needs-input` — counts every `interrupted-*` (cut off) and every `incomplete-*` reason *except* `waiting`. |
+| `WORKER_WAIT_LIMIT` | `10` | The same backstop for the `incomplete-waiting` class alone (a worker that exited cleanly while its detached `dr tmux-run` job keeps going). Looser because the retry just reattaches, sees the job running, and exits for cents — where an `interrupted-*` retry already burned a full `WORKER_BUDGET`. Still capped: a job that is alive but never finishes must not re-dispatch forever. |
 
 To preview the board digest the orchestrator boots with — deterministic, free,
 dispatches nothing:
