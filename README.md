@@ -107,7 +107,9 @@ real `--dry-run`, the cycle orchestrator at the source level — together with t
 human-present `launch-orchestrator.sh` staying deliberately unrestricted; and
 the `bootstrap_worktree_data` critical raw-link gate across all four states
 (missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
-manifest → exempt). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
+manifest → exempt); and the runner's own worktree guard (two fake checkouts: cwd in the
+other one → refuses and names both trees; unrelated repo / same tree / symlinked same
+tree / non-git cwd → runs; the tree-under-test banner present either way). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
 and is byte-identical before/after.
 
 **What the online tier covers:** `board-digest.sh` emits a digest against the live
@@ -123,6 +125,21 @@ board; `launch-orchestrator.sh --dry-run` renders it end-to-end from your conf; 
 ```bash
 dr test                  # full suite (offline + online); online SKIPs if no gh/network
 dr test --offline        # offline tier only (what CI runs)
+```
+
+**From inside a derailleur worktree, run `./bin/test.sh` instead** — the one place `dr`
+is the wrong entry point. Like every `dr` command it resolves through the
+`~/.local/bin` symlink to the *install* checkout, which for every other command is
+correct (they need the machine-local `ledger.md`/`state/`/`projects/*.yml` that live
+there) but for `test` means it would run the primary checkout's `tests/`, not the branch
+you are standing in — and it used to do that silently, reporting a green tally for code
+that never ran. `bin/test.sh` now **refuses** when the cwd is a *different* derailleur
+checkout, naming both trees and the corrective `./bin/test.sh …` command; from anywhere
+else (another project, `$HOME`, `/tmp`) `dr test` works exactly as before. Every run —
+refused or not — opens with the tree under test and the file count it discovered:
+
+```
+testing /path/to/derailleur (12 files in tests/offline)
 ```
 
 Each test file is self-contained and can be run directly for debugging, e.g.
