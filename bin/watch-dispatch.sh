@@ -8,14 +8,23 @@
 # re-dispatch) stays the orchestrator's judgment, per the interactive brief.
 #
 # Terminal state is read from LOCAL signals only — zero GitHub calls per tick:
-#   - ledger.md `status` field flips off `dispatched` on session exit
-#     (done / interrupted-ratelimit / interrupted-budget / interrupted-error /
-#     unknown), set by finalize_dispatch in dispatch-common.sh;
+#   - ledger.md `status` field flips off `dispatched` on session exit, set by
+#     finalize_dispatch in dispatch-common.sh:
+#       done                  finished AND finalized (deliverables present)
+#       incomplete-<reason>   exited cleanly WITHOUT finalizing (waiting / uncommitted /
+#                             unpushed / nopr / draft / noverdict) — terminal for this
+#                             dispatch, but the work isn't finished: RE-DISPATCH REQUIRED
+#       interrupted-<reason>  cut off (ratelimit / budget / error)
+#       unknown               no parseable result JSON
 #   - a checker additionally writes logs/<slug>-pr-<n>-verdict.json on completion
-#     (this can appear a beat before the status flip — checked first).
-# Silence-is-not-success: it also fires on the interrupt/unknown statuses, and if
-# a session's pid is dead but its status was never finalized it reports `unknown`
-# rather than watching forever.
+#     (this can appear a beat before the status flip — checked first, unless the
+#     status is already incomplete-*, which is the later and more authoritative word).
+#     `incomplete-waiting` outranking the verdict file does NOT discard it, though: a
+#     verdict already on disk is reported alongside the live session, so the operator
+#     sees both facts (issue #40 amendment).
+# Silence-is-not-success: it also fires on the incomplete/interrupt/unknown statuses,
+# and if a session's pid is dead but its status was never finalized it reports
+# `unknown` rather than watching forever.
 #
 # Prints one line per item the instant it goes terminal, then exits 0 once every
 # watched item is terminal. Blocking by design: a wrapping `Monitor` makes it
@@ -87,6 +96,33 @@ line_field() {   # $1 = line, $2 = field name (status|pid) -> value (or empty)
   echo "$1" | sed -n "s/.*| $2 \\([A-Za-z0-9-][A-Za-z0-9-]*\\).*/\\1/p"
 }
 
+# terminal_note <terminal-value> <kind> <slug> <num> -> " (hint)" for a status the
+# operator must act on, else nothing. `incomplete-*` is terminal for THIS dispatch but
+# the work isn't done — without the hint it reads like any other finish (issue #40).
+#
+# `incomplete-waiting` on a CHECKER whose verdict file already parses is the one case
+# where the status alone underreports: the verdict is real and usable, and the thing
+# that still needs reconciling is the live tmux session in that worktree. Name both.
+# A missing/unparseable verdict falls through to the plain hint — silently, since a
+# checker that wrote nothing is the ordinary case here.
+terminal_note() {
+  local t="${1:-}" kind="${2:-}" slug="${3:-}" num="${4:-}" vfile v
+  case "$t" in
+    incomplete-waiting)
+      vfile="$ORCH/logs/${slug}-pr-${num}-verdict.json"
+      if [ "$kind" = "checker" ] && [ -f "$vfile" ]; then
+        v="$(jq -r '.verdict // empty' "$vfile" 2>/dev/null || true)"
+        if [ -n "$v" ]; then
+          printf ' (verdict %s already written; tmux session alive — reconcile before dispatching into that worktree)' "$v"
+          return 0
+        fi
+      fi
+      printf ' (re-dispatch required)' ;;
+    incomplete-*) printf ' (re-dispatch required)' ;;
+  esac
+  return 0
+}
+
 # Resolve the terminal state of one item, or empty string if not yet terminal.
 terminal_state() {  # $1=kind $2=slug $3=num -> prints terminal value or nothing
   local kind="$1" slug="$2" num="$3" key line st pid verdict
@@ -94,14 +130,24 @@ terminal_state() {  # $1=kind $2=slug $3=num -> prints terminal value or nothing
     key="^- #${num} \\| [^|]*/${slug} \\|"
   else
     key="^- check pr#${num} \\| [^|]*/${slug} \\|"
-    verdict="$ORCH/logs/${slug}-pr-${num}-verdict.json"
-    if [ -f "$verdict" ]; then
-      jq -r '.verdict // "verdict-written"' "$verdict" 2>/dev/null || echo "verdict-written"
-      return 0
-    fi
   fi
   line="$(ledger_line "$key")"
   st="$(line_field "$line" status)"
+  if [ "$kind" = "checker" ]; then
+    verdict="$ORCH/logs/${slug}-pr-${num}-verdict.json"
+    # The verdict file normally wins (it can land a beat before the status flip) —
+    # EXCEPT when the status is already `incomplete-*`: that is written by
+    # finalize_dispatch after the session exited, so it is strictly later news, and it
+    # means the launcher judged the verdict missing or unusable.
+    case "$st" in
+      incomplete-*) : ;;
+      *)
+        if [ -f "$verdict" ]; then
+          jq -r '.verdict // "verdict-written"' "$verdict" 2>/dev/null || echo "verdict-written"
+          return 0
+        fi ;;
+    esac
+  fi
   if [ -n "$st" ] && [ "$st" != "dispatched" ]; then
     echo "$st"; return 0
   fi
@@ -121,7 +167,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   while [ "$i" -lt "$n" ]; do
     t="$(terminal_state "${kinds[$i]}" "${slugs[$i]}" "${nums[$i]}")"
     [ -n "$t" ] || t="pending"
-    echo "  ${labels[$i]} (${kinds[$i]}) -> $t"
+    echo "  ${labels[$i]} (${kinds[$i]}) -> $t$(terminal_note "$t" "${kinds[$i]}" "${slugs[$i]}" "${nums[$i]}")"
     i=$((i + 1))
   done
   exit 0
@@ -138,7 +184,7 @@ while [ "$remaining" -gt 0 ]; do
     if [ "${fired[$i]:-0}" -eq 0 ]; then
       t="$(terminal_state "${kinds[$i]}" "${slugs[$i]}" "${nums[$i]}")"
       if [ -n "$t" ]; then
-        echo "${labels[$i]} (${kinds[$i]}) -> $t"
+        echo "${labels[$i]} (${kinds[$i]}) -> $t$(terminal_note "$t" "${kinds[$i]}" "${slugs[$i]}" "${nums[$i]}")"
         fired[$i]=1
         remaining=$((remaining - 1))
       fi

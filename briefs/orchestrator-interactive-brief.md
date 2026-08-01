@@ -161,26 +161,39 @@ per event — never per tick:
   escalation, the operator's court;
 - any `interrupted-*` / `unknown` → say so plainly (the launcher already pushed any
   stranded commits and commented on the issue); a redispatch resumes it.
+- any `incomplete-*` → the session exited **without finalizing** (see below); say so
+  plainly and treat it as the worker's court, not as a finish.
 
-## tmux-aware reconciliation — `done` is not "finalized"
+## tmux-aware reconciliation — read the mechanical signals first
 
 Workers run multi-minute jobs (R estimations, simulations) in **detached tmux**
 sessions named `derail-<owner>-<repo>-<issue>` (`/`→`-` in the owner/repo), with a
-durable log outside the worktree. Because a headless worker **exits-to-wait** while
-its detached tmux job is still running, the ledger can flip `status=done` while the
-tmux run is *still live or unreconciled* and the PR is not finalized (still a draft,
-session not torn down). So:
+durable log outside the worktree. A headless worker **exits-to-wait** while its
+detached job is still running — a correct, intended exit that nevertheless leaves the
+PR draft and nothing finalized.
 
-1. **`status=done` ≠ work finalized.** Before treating a worker terminal as complete,
-   confirm the deliverables are committed and the PR is **ready/mergeable, not draft**
-   (the `board-digest.sh` / `gh pr view` you already run per terminal event shows this).
-2. **Check for a possibly-live run:** `tmux ls`, match the
-   `derail-<owner>-<repo>-<issue>` name convention, and read the durable log tail.
-3. **Collision rule:** **never dispatch a checker (or another worker) into a worktree
-   whose tmux session is `exists-alive`.** Two pipelines writing the same
-   `figures/`/`results/` will corrupt each other. Reconcile first — a resume worker
-   verifies the run and tears the session down — *then* dispatch the checker. When in
-   doubt, surface the live session to the operator rather than dispatching into it.
+**The system now tells you this mechanically — you no longer have to infer it:**
+
+1. **Ledger `status`.** `finalize_dispatch` records `incomplete-<reason>` (not `done`)
+   whenever a clean exit didn't finalize: `waiting` (its tmux job is still alive),
+   `uncommitted`, `unpushed`, `nopr`, `draft`, or `noverdict` for a checker. `done`
+   now means *actually finalized* — deliverables committed and pushed, PR ready (or,
+   for a checker, a verdict written). `watch-dispatch.sh` reports an `incomplete-*`
+   item as terminal with `(re-dispatch required)`.
+2. **Digest markers.** `board-digest.sh` marks any issue/PR line whose detached job is
+   live with `⏳ tmux-live <session>`, and names the status in the in-flight
+   section's reason string (`ledger status=incomplete-waiting`). One tmux probe per
+   digest, zero extra GitHub calls.
+3. **Fallback, when you want the detail those two don't carry:** `tmux ls` (match the
+   `derail-<owner>-<repo>-<issue>` convention) and the durable log tail — use this to
+   judge *how far along* or *whether wedged* a run is, not to discover that it exists.
+
+**Collision rule (unchanged):** **never dispatch a checker (or another worker) into a
+worktree whose tmux session is live** — `⏳ tmux-live` in the digest, or `exists-alive`
+from `tmux ls`. Two pipelines writing the same `figures/`/`results/` will corrupt each
+other. Reconcile first — a resume worker verifies the run and tears the session down —
+*then* dispatch the checker. When in doubt, surface the live session to the operator
+rather than dispatching into it.
 
 ## Coordinating with the autonomous scheduler
 

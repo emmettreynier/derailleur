@@ -1,15 +1,29 @@
 #!/usr/bin/env bash
 # dispatch-common.sh — shared post-run helpers for launch-worker.sh / launch-checker.sh.
-# SOURCED, not executed. Its job: make an INTERRUPTED dispatch (rate limit, budget
-# cap, crash) record itself as interrupted instead of looking like a clean finish.
+# SOURCED, not executed. Its job: make a dispatch that did not finish record itself
+# honestly, instead of looking like a clean finish. Two distinct failure shapes:
 #
-# Why this exists: `claude --output-format json` can exit with subtype "success" yet
-# is_error:true + api_error_status:429 ("session limit") — a rate-limit cutoff that
-# leaves work committed locally but UNPUSHED. Keying completion off `subtype` alone
-# (as a naive read does) mistakes that for done. classify_result reads the real fields.
+#   1. INTERRUPTED (rate limit, budget cap, crash) -> `interrupted-*`.
+#      `claude --output-format json` can exit with subtype "success" yet is_error:true +
+#      api_error_status:429 ("session limit") — a cutoff that leaves work committed
+#      locally but UNPUSHED. Keying completion off `subtype` alone (as a naive read
+#      does) mistakes that for done. classify_result reads the real fields.
+#   2. INCOMPLETE (exit-to-wait) -> `incomplete-<reason>` (issue #40).
+#      A genuinely clean exit-0 that finalized nothing: typically an agent that handed a
+#      long run to `dr tmux-run` and — correctly, per its brief — exited to let the next
+#      dispatch reattach, leaving the PR draft or no verdict written. assert_finalized
+#      catches this; classify_result cannot see it and deliberately doesn't try.
+#
+# Ledger status vocabulary: dispatched | done | incomplete-* | interrupted-* | unknown.
+# Consumers prefix-match `incomplete*` exactly as they do `interrupted*`.
 
 # classify_result <log> -> echoes: done | interrupted-ratelimit | interrupted-budget
 #   | interrupted-error | unknown.  Parses the final JSON result line in the log.
+#
+# DELIBERATELY a pure log-JSON parser (issue #40): "the session exited without an
+# error" and "the session actually finalized something" are different questions.
+# assert_finalized below answers the second one and is consulted separately, so each
+# half stays independently testable.
 classify_result() {
   python3 - "$1" <<'PY'
 import json, sys
@@ -107,13 +121,161 @@ PY
   rmdir "$lock" 2>/dev/null || true
 }
 
+# tmux_job_state <name> -> echoes exactly: alive | dead | absent
+#   alive  = the session exists AND its pane is still running
+#   dead   = the session exists but its pane finished (tmux-run.sh's remain-on-exit)
+#   absent = no such session (also: tmux isn't installed on this host)
+#
+# LOAD-BEARING: liveness is `#{pane_dead}`-based, mirroring tmux-run.sh:138-141 — NOT
+# `has-session` alone. tmux-run.sh sets `remain-on-exit on` so a FINISHED job's session
+# lingers for the next worker to inspect; keying off has-session would report every
+# completed-but-not-torn-down run as still running, forever.
+tmux_job_state() {
+  local name="${1:-}" dead
+  if [ -z "$name" ] || ! command -v tmux >/dev/null 2>&1; then
+    echo "absent"; return 0
+  fi
+  if ! tmux has-session -t "$name" 2>/dev/null; then
+    echo "absent"; return 0
+  fi
+  dead="$(tmux list-panes -t "$name" -F '#{pane_dead}' 2>/dev/null | head -1)"
+  if [ "$dead" = 1 ]; then echo "dead"; else echo "alive"; fi
+  return 0
+}
+
+# _log_dispatch_num <log> -> the issue/PR number encoded in the log basename
+# (logs/<slug>-issue-N.log, logs/<slug>-pr-N.log). Empty if it doesn't match.
+# Derived rather than passed so finalize_dispatch's signature stays unchanged.
+_log_dispatch_num() {
+  local base; base="$(basename "${1:-}")"
+  printf '%s' "${base%.log}" | sed -nE 's/^.+-(issue|pr)-([0-9]+)$/\2/p'
+  return 0
+}
+
+# _worktree_repo <worktree> -> owner/repo from the worktree's origin remote (empty
+# if it can't be read).
+_worktree_repo() {
+  git -C "${1:-}" remote get-url origin 2>/dev/null \
+    | sed -E 's#.*github\.com[:/]##; s#\.git$##'
+  return 0
+}
+
+# assert_finalized <kind> <log> <worktree> -> prints "" when the dispatch actually
+# finalized something, else ONE reason token naming the first failed check.
+#
+# WHY (issue #40): a clean exit-0 is not the same as a finished job. A worker that
+# hands a long run to `dr tmux-run` is told to exit cleanly and let the next dispatch
+# reattach — a correct, intended exit-to-wait that nevertheless leaves the PR draft
+# and no deliverable committed. classify_result sees exit-0 and says `done`, and every
+# downstream consumer reads `done` as "finalized". This closes that hole: the ledger
+# records `incomplete-<reason>` instead, which is countable (ledger-prune's
+# WORKER_LIMIT / orchestrator-cycle's NROUNDS) so a chronically unfinishable
+# issue/PR escalates to needs-input rather than re-dispatching forever.
+#
+# Consulted ONLY when classify_result returned `done` — an `interrupted-*`
+# classification is already more informative and keeps its status.
+#
+# Order matters (first failure wins):
+#   worker : waiting -> uncommitted -> unpushed -> nopr -> draft
+#   checker: waiting -> noverdict
+#
+# NO FALSE INCOMPLETE FROM A FLAKY NETWORK: a failed/unparseable `gh` lookup SKIPS the
+# nopr/draft checks with a stderr note rather than asserting a reason. Only local,
+# deterministic signals (git, the filesystem, tmux) may assert one.
+assert_finalized() {
+  local kind="$1" log="$2" worktree="$3"
+  local num repo tmux_name
+  num="$(_log_dispatch_num "$log")"
+  repo="$(_worktree_repo "$worktree")"
+
+  # (1) waiting — a detached run for this task is still going (both roles).
+  # The session name is a pure function of the task (tmux-run.sh:87); issue and PR
+  # numbers share one namespace per repo, so it's unambiguous across roles.
+  if [ -n "$repo" ] && [ -n "$num" ]; then
+    tmux_name="derail-${repo//\//-}-$num"
+    if [ "$(tmux_job_state "$tmux_name")" = "alive" ]; then
+      echo "waiting"; return 0
+    fi
+  fi
+
+  if [ "$kind" = "checker" ]; then
+    # (2c) noverdict — the checker's whole deliverable is the verdict JSON.
+    local vf="${log%.log}-verdict.json" v
+    if [ ! -f "$vf" ]; then
+      echo "noverdict"; return 0
+    fi
+    v="$(jq -r '.verdict // empty' "$vf" 2>/dev/null || true)"   # unparseable -> empty
+    if [ -z "$v" ]; then
+      echo "noverdict"; return 0
+    fi
+    return 0
+  fi
+
+  # (2w) uncommitted — tracked changes still sitting in the worktree. `-uno` so a
+  # stray untracked scratch file (or an unlinked data dir) never trips this.
+  if [ -n "$(git -C "$worktree" status --porcelain -uno 2>/dev/null)" ]; then
+    echo "uncommitted"; return 0
+  fi
+
+  # (3w) unpushed — commits ahead of the upstream, or no upstream at all (a branch
+  # that was never pushed has nothing on GitHub for a reviewer or checker to see).
+  local ahead
+  ahead="$(git -C "$worktree" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '')"
+  case "$ahead" in
+    ''|*[!0-9]*) echo "unpushed"; return 0 ;;   # no upstream / unreadable
+    0)           : ;;
+    *)           echo "unpushed"; return 0 ;;
+  esac
+
+  # (4w/5w) nopr / draft — the PR is the worker's finalization signal (PR-ready is
+  # also the sole checker trigger, so a draft PR is by definition not finished).
+  if [ -z "$repo" ] || [ -z "$num" ]; then
+    echo "  note: could not derive repo/number (log=$log) — skipping nopr/draft checks" >&2
+    return 0
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "  note: gh not on PATH — skipping nopr/draft checks" >&2
+    return 0
+  fi
+  local pr_json pr_rc=0 npr
+  pr_json="$(gh pr list -R "$repo" --head "issue-$num" --state open --json isDraft 2>/dev/null)" \
+    || pr_rc=$?
+  if [ "$pr_rc" -ne 0 ]; then
+    echo "  note: gh PR lookup failed for $repo (head issue-$num) — skipping nopr/draft checks" >&2
+    return 0
+  fi
+  npr="$(printf '%s' "$pr_json" | jq -r 'if type=="array" then length else "?" end' 2>/dev/null \
+         || printf '?')"
+  case "$npr" in
+    ''|*[!0-9]*)
+      echo "  note: gh PR lookup returned unparseable JSON for $repo — skipping nopr/draft checks" >&2
+      return 0 ;;
+  esac
+  if [ "$npr" -eq 0 ]; then
+    echo "nopr"; return 0
+  fi
+  if [ "$(printf '%s' "$pr_json" | jq -r '.[0].isDraft' 2>/dev/null || true)" = "true" ]; then
+    echo "draft"; return 0
+  fi
+  return 0
+}
+
 # finalize_dispatch <log> <ledger> <pid> <worktree> <kind> — run AFTER the claude
-# process exits: classify the outcome, record it in the ledger, and on interruption
-# warn loudly + report unpushed commits the re-dispatch will recover. `pid` is "-"
-# for foreground runs (the ledger line isn't pid-keyed there; the warning still fires).
+# process exits: classify the outcome, record it in the ledger, and on anything short
+# of a clean finish warn loudly + push commits the re-dispatch would otherwise strand.
+# `pid` is "-" for foreground runs (the ledger line isn't pid-keyed there; the warning
+# still fires).
 finalize_dispatch() {
   local log="$1" ledger="$2" pid="$3" worktree="$4" kind="$5"
   local st; st="$(classify_result "$log")"
+  # A clean exit still has to prove it finalized something (issue #40) — an
+  # exit-to-wait on a detached tmux run is exit-0 but not done.
+  if [ "$st" = "done" ]; then
+    local reason; reason="$(assert_finalized "$kind" "$log" "$worktree")"
+    if [ -n "$reason" ]; then
+      st="incomplete-$reason"
+    fi
+  fi
   _ledger_set_status "$ledger" "$pid" "$st"
   if [ "$st" = "done" ]; then
     echo "$kind finished cleanly."
@@ -140,19 +302,38 @@ finalize_dispatch() {
     fi
   fi
 
-  # Leave a durable, countable trail on the issue — the same comment-is-signal
-  # convention the checker uses for its verdicts (`**Checker verdict: …`). A
-  # WORKER_LIMIT check in ledger-prune.sh counts trailing `**Worker interrupted:`
-  # comments to catch a runaway interrupted-retry loop before it burns budget
-  # forever on an issue that can never finish unattended.
+  # Leave a durable, countable trail on the issue/PR — the same comment-is-signal
+  # convention the checker uses for its verdicts (`**Checker verdict: …`). The caps
+  # count these: ledger-prune.sh's WORKER_LIMIT counts trailing `**Worker interrupted:`
+  # AND `**Worker incomplete:` comments; orchestrator-cycle.sh's NROUNDS counts
+  # `**Checker verdict:` AND `**Checker incomplete:`. Without that, an exit-to-wait
+  # produced NEITHER signal and a wedged job re-dispatched every cycle forever with no
+  # path to needs-input (issue #40).
+  local lead="interrupted"
+  case "$st" in incomplete-*) lead="incomplete" ;; esac
+  local repo; repo="$(_worktree_repo "$worktree")"
+
   if [ "$kind" = "worker" ]; then
-    local repo issue
-    repo="$(git -C "$worktree" remote get-url origin 2>/dev/null | sed -E 's#.*github\.com[:/]##; s#\.git$##')"
+    local issue
     issue="$(git -C "$worktree" branch --show-current 2>/dev/null | sed -nE 's/^issue-([0-9]+)$/\1/p')"
     if [ -n "$repo" ] && [ -n "$issue" ]; then
-      gh issue comment "$issue" -R "$repo" \
-        --body "**Worker interrupted: $st**${push_note}. Not a failure by itself — the orchestrator recovers this automatically next cycle; repeated interruptions on this issue with no clean finish will eventually escalate to \`needs-input\`." \
-        >>"$log" 2>&1 || echo "  ⚠ could not post interruption comment on $repo#$issue" >&2
+      local body
+      if [ "$lead" = "incomplete" ]; then
+        body="**Worker incomplete: $st**${push_note}. The session exited cleanly but did NOT finalize (first unmet check: \`${st#incomplete-}\`) — most often an exit-to-wait on a detached \`dr tmux-run\` job. Re-dispatch to reattach-and-babysit per the worker brief; repeated attempts on this issue with no clean finish will escalate to \`needs-input\`."
+      else
+        body="**Worker interrupted: $st**${push_note}. Not a failure by itself — the orchestrator recovers this automatically next cycle; repeated attempts on this issue with no clean finish will eventually escalate to \`needs-input\`."
+      fi
+      gh issue comment "$issue" -R "$repo" --body "$body" \
+        >>"$log" 2>&1 || echo "  ⚠ could not post $lead comment on $repo#$issue" >&2
+    fi
+  elif [ "$kind" = "checker" ] && [ "$lead" = "incomplete" ]; then
+    # PR number comes from the LOG basename, not the branch: a checker runs in the
+    # worker's `issue-N` worktree, so the branch names the issue, not the PR.
+    local pr; pr="$(_log_dispatch_num "$log")"
+    if [ -n "$repo" ] && [ -n "$pr" ]; then
+      gh pr comment "$pr" -R "$repo" \
+        --body "**Checker incomplete: $st**${push_note}. The session exited cleanly but wrote no usable verdict (first unmet check: \`${st#incomplete-}\`). No verdict was recorded, so this round decided nothing; repeated incomplete rounds count toward \`CHECKER_LIMIT\` and escalate to \`needs-input\`." \
+        >>"$log" 2>&1 || echo "  ⚠ could not post incomplete comment on $repo#$pr" >&2
     fi
   fi
 }

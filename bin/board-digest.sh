@@ -8,7 +8,8 @@
 # DECIDES what to dispatch. Safe to run standalone to eyeball board state.
 #
 # Network: 1 board call + 1 `gh search prs` (ready PRs, all repos) +
-# 1 `gh search issues` (close dates, for the Done cap). Local: reads ledger.md.
+# 1 `gh search issues` (close dates, for the Done cap). Local: reads ledger.md, plus
+# ONE `tmux list-panes -a` probe for the ⏳ tmux-live marker (zero GitHub calls).
 #
 # Env:
 #   DONE_DAYS     how many days back to show closed items (default 7)
@@ -62,8 +63,20 @@ fi
 # annotation (all onboarded repos are autonomously dispatchable).
 scheduled_allow="$(scheduled_repos | paste -sd, - || true)"
 
+# Live detached jobs — ONE tmux probe for the whole digest, zero GitHub calls (issue
+# #40). tmux-run.sh names every session `derail-<owner-repo>-<num>`, a pure function of
+# the task, so the digest can join them to issue/PR lines without asking GitHub anything.
+# Liveness MUST be `#{pane_dead}`-based: tmux-run.sh sets `remain-on-exit on`, so a
+# FINISHED session still answers `has-session` and would be marked live forever.
+if command -v tmux >/dev/null 2>&1; then
+  tmux_live="$(tmux list-panes -a -F '#{session_name} #{pane_dead}' 2>/dev/null \
+                 | awk '$1 ~ /^derail-/ && $2 == 0 { print $1 }' | sort -u | paste -sd, - || true)"
+else
+  tmux_live=""
+fi
+
 BOARD_JSON="$board_json" CLOSED_JSON="$closed_json" PR_OWNER="$PR_OWNER" \
-OPERATOR_NAME="$OPERATOR_NAME" SCHEDULED_ALLOW="$scheduled_allow" \
+OPERATOR_NAME="$OPERATOR_NAME" SCHEDULED_ALLOW="$scheduled_allow" TMUX_LIVE="$tmux_live" \
 LEDGER="$LEDGER" DONE_DAYS="$DONE_DAYS" ONBOARDED_SLUGS="$onboarded_slugs" python3 <<'PY'
 import json, os, re, subprocess, sys
 from datetime import datetime, timezone, timedelta
@@ -113,6 +126,16 @@ def is_onboarded(repo_url): return short(repo_url) in onboarded
 sched_allow = {s for s in os.environ.get("SCHEDULED_ALLOW", "").split(",") if s}
 paused = (onboarded - sched_allow) if sched_allow else set()
 def is_paused(repo_url): return short(repo_url) in paused
+
+# Live detached tmux jobs (one probe, done in bash above). The session name is a pure
+# function of the task — derail-<owner-repo>-<num>, tmux-run.sh:87 — so any issue or PR
+# line can be annotated with it. This is VISIBILITY ONLY: it never gates a dispatch
+# decision (worker re-dispatch is the intended reattach-and-babysit; PR-ready remains
+# the sole checker trigger — see issue #40's non-goals).
+tmux_live = {s for s in os.environ.get("TMUX_LIVE", "").split(",") if s}
+def tmux_marker(repo_nwo, num):
+    name = f"derail-{(repo_nwo or '').replace('/', '-')}-{num}"
+    return f" ⏳ tmux-live {name}" if name in tmux_live else ""
 all_rows = rows
 rows = [r for r in all_rows if is_onboarded(r["repo_url"])]
 excluded_rows  = [r for r in all_rows if not is_onboarded(r["repo_url"])]
@@ -221,8 +244,14 @@ for key, meta in inflight.items():
                 reasons.append("issue closed")
         else:
             reasons.append("not on board / lookup failed")
-    if meta.get("status") in ("done", "failed"):
-        reasons.append(f"ledger status={meta['status']}")
+    # `incomplete-*` (issue #40) is terminal for CAPACITY purposes exactly like
+    # done/failed — the session is gone, so it holds no slot — but it is NOT
+    # "finalized": the reason string carries the full status (e.g.
+    # `ledger status=incomplete-waiting`) so an unreconciled dispatch is legible here
+    # without opening ledger.md.
+    _st = meta.get("status") or ""
+    if _st in ("done", "failed") or _st.startswith("incomplete"):
+        reasons.append(f"ledger status={_st}")
     if pid_alive(meta.get("pid")) is False:
         reasons.append(f"pid {meta['pid']} not running")
     inflight_info[key] = {**meta, "title": title,
@@ -237,9 +266,10 @@ def line(r, extra=""):
     tag = " {" + ",".join(labs) + "}" if labs else ""
     flag = " ⚙ in-flight" if is_live_inflight(r) else ""
     pause = " ⏸ scheduler-paused" if is_paused(r["repo_url"]) else ""
+    tmuxm = tmux_marker(nwo(r["repo_url"]), r["num"])
     t = r["title"]
     if len(t) > 72: t = t[:69] + "…"
-    return f"- [{r['project']}] {short(r['repo_url'])}#{r['num']} — {t}{tag}{flag}{pause}{extra}"
+    return f"- [{r['project']}] {short(r['repo_url'])}#{r['num']} — {t}{tag}{flag}{pause}{tmuxm}{extra}"
 
 def spec_excerpt(body):
     """The intake-gate signal for a dispatch candidate: a one-line lead plus its
@@ -303,7 +333,8 @@ def pr_line(pr, extra=""):
     t = (pr.get("title") or "").strip()
     if len(t) > 66: t = t[:63] + "…"
     closes = ",".join(f"#{r.get('number')}" for r in (pr.get("closingIssuesReferences") or [])) or "—"
-    return f"- {short_repo(pr['repo'])}#{pr['number']} — {t}  (closes {closes}){extra}  {pr.get('url','')}"
+    tmuxm = tmux_marker(pr["repo"], pr["number"])
+    return f"- {short_repo(pr['repo'])}#{pr['number']} — {t}  (closes {closes}){tmuxm}{extra}  {pr.get('url','')}"
 
 def pr_has_live_worker(pr):
     return any((pr["repo"], ref.get("number")) in live_keys
@@ -399,13 +430,15 @@ w(f"## In flight — ledger (live {len(live)} · stale {len(stale)})")
 if live:
     for (repo, num), v in sorted(live.items()):
         pidpart = f" · pid {v['pid']}" if v.get("pid") and v["pid"] not in ("-", "?") else ""
-        w(f"- {repo.split('/')[-1]}#{num} — {inflight_title(v)} — dispatched {v['dispatched']}{pidpart}")
+        w(f"- {repo.split('/')[-1]}#{num} — {inflight_title(v)} — dispatched {v['dispatched']}{pidpart}{tmux_marker(repo, num)}")
 else:
     w("- none live")
 if stale:
+    # A ⏳ tmux-live marker here is the one that matters most: the dispatch is gone but
+    # its detached job is still running, so the work is neither finished nor lost.
     w(f"**stale — safe to prune ({len(stale)}):**")
     for (repo, num), v in sorted(stale.items()):
-        w(f"- {repo.split('/')[-1]}#{num} — {inflight_title(v)}  ⚠ {', '.join(v['reasons'])}")
+        w(f"- {repo.split('/')[-1]}#{num} — {inflight_title(v)}  ⚠ {', '.join(v['reasons'])}{tmux_marker(repo, num)}")
 if not inflight_info:
     w("- none")
 w()

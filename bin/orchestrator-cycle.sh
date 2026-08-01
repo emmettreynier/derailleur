@@ -26,8 +26,12 @@
 #   WORKER_BUDGET   per-worker session budget in USD (default 10.00)
 #   CHECKER_BUDGET  per-checker session budget in USD (default 3.00)
 #   CHECKER_LIMIT   max checker rounds per PR before escalating to the operator (default 4)
-#   WORKER_LIMIT    max consecutive interrupted worker attempts on one issue before
-#                   escalating to the operator instead of retrying again (default 4)
+#   WORKER_LIMIT    max consecutive interrupted / unfinalized worker attempts on one
+#                   issue before escalating to the operator instead of retrying again
+#                   (default 4)
+#   WORKER_WAIT_LIMIT  the same backstop for the cheap `incomplete-waiting` class (a
+#                   worker that exited while its detached tmux job runs on): looser,
+#                   because the retry reattaches and exits for cents (default 10)
 set -euo pipefail
 
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,6 +46,7 @@ WORKER_BUDGET="${WORKER_BUDGET:-10.00}"
 CHECKER_BUDGET="${CHECKER_BUDGET:-3.00}"
 CHECKER_LIMIT="${CHECKER_LIMIT:-4}"
 WORKER_LIMIT="${WORKER_LIMIT:-4}"
+WORKER_WAIT_LIMIT="${WORKER_WAIT_LIMIT:-10}"
 BRIEF_FILE="$ORCH/briefs/orchestrator-brief.md"
 LEDGER="$ORCH/ledger.md"
 DRY=0
@@ -78,7 +83,8 @@ yml() { sed -nE "s/^$2:[[:space:]]*(.+)/\1/p" "$1" \
           | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//' | head -1; }
 
 # 1. Prune stale entries so the live count is accurate -------------------------
-WORKER_LIMIT="$WORKER_LIMIT" "$ORCH/bin/ledger-prune.sh" || true
+WORKER_LIMIT="$WORKER_LIMIT" WORKER_WAIT_LIMIT="$WORKER_WAIT_LIMIT" \
+  "$ORCH/bin/ledger-prune.sh" || true
 
 # 1b. Reclaim disk: remove worktrees whose work is merged/closed and already
 # captured on GitHub (a spent derivative). Conservative — never touches a live
@@ -179,9 +185,15 @@ for pr in json.load(sys.stdin):
     # research call a worker can't settle). Rounds are counted PER GENERATION, not
     # over the PR's lifetime: a pass / pass_with_findings / blocked verdict hands the
     # ball to the operator and ends a generation; changes_requested / fail keeps it
-    # worker-side. So we count only the verdict comments AFTER the most recent
+    # worker-side. So we count only the round comments AFTER the most recent
     # to-operator verdict — once the operator has reviewed and bounced, the next check is
-    # round 1 again, not round N. (Verdict comments are led by "**Checker verdict:".)
+    # round 1 again, not round N.
+    # A round is EITHER a verdict ("**Checker verdict:") or an incomplete finish
+    # ("**Checker incomplete:", posted by finalize_dispatch when a checker session
+    # exited without writing a usable verdict — issue #40). Counting only verdicts left
+    # a checker that never finishes invisible to this cap, re-dispatching at
+    # CHECKER_BUDGET a round forever. An incomplete round can never END a generation —
+    # only a to-operator verdict does — so the per-generation reset is unchanged.
     NROUNDS="$(gh pr view "$pr" -R "$repo" --json comments 2>/dev/null \
       | python3 -c '
 import sys, json, re
@@ -189,17 +201,18 @@ try:
     comments = json.load(sys.stdin).get("comments", [])
 except Exception:
     print(0); sys.exit()
-verdicts = [c["body"] for c in comments if c["body"].startswith("**Checker verdict")]
+rounds = [c["body"] for c in comments
+          if c["body"].startswith(("**Checker verdict", "**Checker incomplete"))]
 to_operator = {"pass", "pass_with_findings", "blocked"}   # verdicts that end a generation
 last_handoff = -1
-for i, b in enumerate(verdicts):
+for i, b in enumerate(rounds):
     m = re.match(r"\*\*Checker verdict:\s*`?\s*([a-z_]+)", b, re.I)
     if (m.group(1).lower() if m else "") in to_operator:
         last_handoff = i
-print(len(verdicts) - (last_handoff + 1))
+print(len(rounds) - (last_handoff + 1))
 ' 2>/dev/null || echo 0)"
     if [ "${NROUNDS:-0}" -ge "$CHECKER_LIMIT" ]; then
-      echo "  $slug PR #$pr — $NROUNDS checker rounds (limit $CHECKER_LIMIT); escalating to $OPERATOR_NAME"
+      echo "  $slug PR #$pr — $NROUNDS checker rounds, verdict or incomplete (limit $CHECKER_LIMIT); escalating to $OPERATOR_NAME"
       if [ "$DRY" = 0 ]; then
         gh issue edit "$issue" -R "$repo" --add-label needs-input 2>/dev/null || true
         gh pr comment "$pr" -R "$repo" --body "🔁 Checker limit reached: $NROUNDS checker rounds without a clean pass. Escalating to @$GITHUB_HANDLE — the unresolved finding is likely a research-judgment call a worker can't settle. Labeled needs-input."
