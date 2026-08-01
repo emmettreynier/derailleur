@@ -25,7 +25,9 @@
 #                   expensive default an interactive session happens to be set to.
 #   WORKER_BUDGET   per-worker session budget in USD (default 10.00)
 #   CHECKER_BUDGET  per-checker session budget in USD (default 3.00)
-#   CHECKER_LIMIT   max checker rounds per PR before escalating to the operator (default 4)
+#   CHECKER_LIMIT   max checker rounds per PR, in the current review generation,
+#                   before escalating to the operator. A round is a verdict, an
+#                   incomplete finish, or an interrupted one (default 4)
 #   WORKER_LIMIT    max consecutive interrupted / unfinalized worker attempts on one
 #                   issue before escalating to the operator instead of retrying again
 #                   (default 4)
@@ -36,6 +38,10 @@ set -euo pipefail
 
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ORCH/bin/config-common.sh"   # OPERATOR_NAME, GITHUB_HANDLE (escalation @-mention)
+# CHECKER_ROUND_LEADS + checker_rounds_this_generation: the checker-round vocabulary
+# lives with the code that POSTS it (issue #52), so the counter below can never fall
+# behind the poster. Sourcing is side-effect-free — the file only defines things.
+source "$ORCH/bin/dispatch-common.sh"
 CAP="${CAP:-2}"
 BUDGET="${BUDGET:-2.00}"
 # MODEL env overrides; else ORCHESTRATOR_MODEL from conf (config-common.sh sourced
@@ -188,34 +194,21 @@ for pr in json.load(sys.stdin):
     # worker-side. So we count only the round comments AFTER the most recent
     # to-operator verdict — once the operator has reviewed and bounced, the next check is
     # round 1 again, not round N.
-    # A round is EITHER a verdict ("**Checker verdict:") or an incomplete finish
-    # ("**Checker incomplete:", posted by finalize_dispatch when a checker session
-    # exited without writing a usable verdict — issue #40). Counting only verdicts left
-    # a checker that never finishes invisible to this cap, re-dispatching at
-    # CHECKER_BUDGET a round forever. An incomplete round can never END a generation —
-    # only a to-operator verdict does — so the per-generation reset is unchanged.
-    NROUNDS="$(gh pr view "$pr" -R "$repo" --json comments 2>/dev/null \
-      | python3 -c '
-import sys, json, re
-try:
-    comments = json.load(sys.stdin).get("comments", [])
-except Exception:
-    print(0); sys.exit()
-rounds = [c["body"] for c in comments
-          if c["body"].startswith(("**Checker verdict", "**Checker incomplete"))]
-to_operator = {"pass", "pass_with_findings", "blocked"}   # verdicts that end a generation
-last_handoff = -1
-for i, b in enumerate(rounds):
-    m = re.match(r"\*\*Checker verdict:\s*`?\s*([a-z_]+)", b, re.I)
-    if (m.group(1).lower() if m else "") in to_operator:
-        last_handoff = i
-print(len(rounds) - (last_handoff + 1))
-' 2>/dev/null || echo 0)"
+    # A round is any lead in CHECKER_ROUND_LEADS (dispatch-common.sh): a verdict, an
+    # incomplete finish (issue #40), or an interrupted one (issue #52 — a cut-off
+    # checker, most often rate-limited). Counting only verdicts left a checker that
+    # never finishes invisible to this cap, re-dispatching at CHECKER_BUDGET a round
+    # forever. Neither incomplete nor interrupted can END a generation — only a
+    # to-operator verdict does — so the per-generation reset is unchanged.
+    # Fetched into a variable first, then piped: `set -o pipefail` makes a failing `gh`
+    # poison the whole pipeline's status, and this runs under `set -e`.
+    PRJSON="$(gh pr view "$pr" -R "$repo" --json comments 2>/dev/null || true)"
+    NROUNDS="$(printf '%s' "$PRJSON" | checker_rounds_this_generation)"
     if [ "${NROUNDS:-0}" -ge "$CHECKER_LIMIT" ]; then
-      echo "  $slug PR #$pr — $NROUNDS checker rounds, verdict or incomplete (limit $CHECKER_LIMIT); escalating to $OPERATOR_NAME"
+      echo "  $slug PR #$pr — $NROUNDS checker rounds without a to-operator verdict (interrupted, incomplete, or changes_requested) (limit $CHECKER_LIMIT); escalating to $OPERATOR_NAME"
       if [ "$DRY" = 0 ]; then
         gh issue edit "$issue" -R "$repo" --add-label needs-input 2>/dev/null || true
-        gh pr comment "$pr" -R "$repo" --body "🔁 Checker limit reached: $NROUNDS checker rounds without a clean pass. Escalating to @$GITHUB_HANDLE — the unresolved finding is likely a research-judgment call a worker can't settle. Labeled needs-input."
+        gh pr comment "$pr" -R "$repo" --body "🔁 Checker limit reached: $NROUNDS checker rounds without a to-operator verdict (interrupted, incomplete, or changes_requested). Escalating to @$GITHUB_HANDLE — the holdout is likely a research-judgment call a worker can't settle, or a checker that cannot finish unattended. Labeled needs-input."
       fi
       continue
     fi

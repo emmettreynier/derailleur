@@ -42,7 +42,12 @@ chmod +x "$SHIMS/tmux"
 
 cat >"$SHIMS/gh" <<'SH'
 #!/usr/bin/env bash
-# Only `gh pr list … --json isDraft` is exercised here; anything else is a no-op.
+# Every invocation is appended to $GH_CALLS (when set) so a test can assert what
+# finalize_dispatch posted; `gh pr list … --json isDraft` is the only query answered.
+if [ -n "${GH_CALLS:-}" ]; then printf '%s\n' "$*" >>"$GH_CALLS"; fi
+case "$1 ${2:-}" in
+  "pr comment"|"issue comment") exit 0 ;;
+esac
 case "${FAKE_GH_MODE:-nopr}" in
   nopr)    echo '[]' ;;
   draft)   echo '[{"isDraft":true}]' ;;
@@ -225,3 +230,51 @@ FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready \
 assert_contains "$(cat "$LED")" "status done" \
   "finalize_dispatch still records plain 'done' for a healthy run" \
   "A clean, pushed, ready-PR worker must record done — no false incomplete."
+
+# --- the checker posts BOTH leads (issue #52) ------------------------------------
+# An interrupted checker used to post NOTHING countable, so CHECKER_LIMIT stayed frozen
+# at zero and the same PR was re-checked every cycle at a full CHECKER_BUDGET. Both
+# cases below post on the PR number taken from the LOG basename (`demo-pr-9`), not the
+# branch — a checker runs in the worker's `issue-N` worktree.
+CHK_LOG="$LOGS/demo-pr-9.log"
+CALLS="$LOGS/gh-calls.txt"
+
+printf '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"Claude AI usage limit reached"}\n' >"$CHK_LOG"
+: >"$CALLS"
+cat >"$LED" <<LEDGER
+- check pr#9 | owner/demo | issue-9 | $CHK_LOG | pid 4245 | dispatched 2026-01-01T00:00:00Z | status dispatched
+LEDGER
+GH_CALLS="$CALLS" FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready \
+  finalize_dispatch "$CHK_LOG" "$LED" 4245 "$WT" checker >/dev/null 2>&1 || true
+assert_contains "$(cat "$LED")" "status interrupted-ratelimit" \
+  "a rate-limited checker records interrupted-ratelimit" \
+  "classify_result must own the interrupted path for checkers too."
+assert_contains "$(cat "$CALLS")" "pr comment 9 -R owner/demo" \
+  "an interrupted checker comments on the PR from the log basename" \
+  "The comment must land on the PR (demo-pr-9.log -> #9), not the worktree's issue branch."
+assert_contains "$(cat "$CALLS")" "**Checker interrupted: interrupted-ratelimit**" \
+  "an interrupted checker posts the '**Checker interrupted:' lead (issue #52)" \
+  "Without this lead the round is uncountable and CHECKER_LIMIT never trips."
+assert_contains "$(cat "$CALLS")" "CHECKER_LIMIT" \
+  "the interrupted-checker comment names the cap it counts toward" \
+  "Keep the escalation path legible in the comment, as the worker leads do."
+
+# …and the incomplete lead still lands (the #40 behaviour this must not regress).
+printf '{"type":"result","subtype":"success","is_error":false,"result":"executing in the background"}\n' >"$CHK_LOG"
+rm -f "${CHK_LOG%.log}-verdict.json"
+: >"$CALLS"
+GH_CALLS="$CALLS" FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready \
+  finalize_dispatch "$CHK_LOG" "$LED" 4245 "$WT" checker >/dev/null 2>&1 || true
+assert_contains "$(cat "$CALLS")" "**Checker incomplete: incomplete-noverdict**" \
+  "a checker that wrote no verdict still posts the '**Checker incomplete:' lead" \
+  "Adding the interrupted lead must not displace the incomplete one (issue #40)."
+
+# A checker that finished cleanly posts NOTHING — the false-positive guard.
+printf '{"verdict":"pass"}\n' >"${CHK_LOG%.log}-verdict.json"
+: >"$CALLS"
+GH_CALLS="$CALLS" FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready \
+  finalize_dispatch "$CHK_LOG" "$LED" 4245 "$WT" checker >/dev/null 2>&1 || true
+n_posts="$(grep -c 'pr comment' "$CALLS" 2>/dev/null || true)"
+assert_eq "0" "$n_posts" \
+  "a checker that wrote its verdict posts no incomplete/interrupted comment" \
+  "Only a dispatch short of a clean finish may leave a countable round comment."
