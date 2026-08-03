@@ -126,10 +126,12 @@ PY
 #   dead   = the session exists but its pane finished (tmux-run.sh's remain-on-exit)
 #   absent = no such session (also: tmux isn't installed on this host)
 #
-# LOAD-BEARING: liveness is `#{pane_dead}`-based, mirroring tmux-run.sh:138-141 — NOT
-# `has-session` alone. tmux-run.sh sets `remain-on-exit on` so a FINISHED job's session
-# lingers for the next worker to inspect; keying off has-session would report every
-# completed-but-not-torn-down run as still running, forever.
+# LOAD-BEARING: liveness is `#{pane_dead}`-based, mirroring tmux-run.sh's own
+# classification block — NOT `has-session` alone. tmux-run.sh arms `remain-on-exit on`
+# in the same invocation that creates the session, so a FINISHED job's session lingers
+# for the next worker to inspect (even one that finished in milliseconds); keying off
+# has-session would report every completed-but-not-torn-down run as still running,
+# forever.
 tmux_job_state() {
   local name="${1:-}" dead
   if [ -z "$name" ] || ! command -v tmux >/dev/null 2>&1; then

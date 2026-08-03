@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # test-tmux-run.sh (offline) — tmux-run.sh name/log derivation, --tail validation,
-# {{SLUG}} token wiring, and the atomic-create mutex. Migrated from smoke-test.sh
-# check (f). The dry-run + static-wiring halves are deterministic and offline; the
-# live mutex half needs tmux and SKIPs cleanly when it's absent. No network, nothing
-# spent.
+# {{SLUG}} token wiring, the atomic-create mutex, and the inspectable-dead-session
+# invariant for a fast-exiting command. Migrated from smoke-test.sh check (f). The
+# dry-run + static-wiring halves are deterministic and offline; the live half needs
+# tmux and SKIPs cleanly when it's absent. No network, nothing spent.
 set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$TEST_DIR/../lib/assert.sh"
@@ -76,4 +76,84 @@ else
     "A colliding create must report the existing session, never create a second."
   assert_eq 1 "$logsz" "durable log written (non-empty) at <data_root>/logs" \
     "The tee'd log path (2>&1 | tee <log>) is broken in bin/tmux-run.sh."
+
+  # fast-exit case (issue #54): a command that finishes in milliseconds must STILL leave
+  # an inspectable session whose pane is dead. remain-on-exit has to be armed in the same
+  # tmux invocation as the create; split across two calls the pane exits in the gap, the
+  # session vanishes, and `dead` collapses into `absent` — "finished" becomes
+  # indistinguishable from "never ran".
+  TR_FAST="derail-owner-demo-repo-8"
+  tmux kill-session -t "$TR_FAST" 2>/dev/null || true
+  rc=0; f_out="$("$TMUXRUN" zz-smoke 8 -- true 2>&1)" || rc=$?
+  # Poll for the pane to finish — the assertion is that it dies *and stays inspectable*,
+  # not how quickly. Bail out early if the session disappears (that IS the regression).
+  n=0; f_dead=""
+  while [ "$n" -lt 40 ]; do
+    if ! tmux has-session -t "$TR_FAST" 2>/dev/null; then f_dead="gone"; break; fi
+    f_dead="$(tmux list-panes -t "$TR_FAST" -F '#{pane_dead}' 2>/dev/null | head -1)"
+    if [ "$f_dead" = 1 ]; then break; fi
+    sleep 0.25; n=$((n + 1))
+  done
+  # Classify it the way every consumer does — through dispatch-common's tmux_job_state.
+  # A sandboxed COPY, per test-finalize-complete.sh: sourcing the real file would let an
+  # offline test write state/ into the operator's live checkout.
+  sandbox_copy_script "$SB" dispatch-common
+  . "$SB/bin/dispatch-common.sh"
+  f_state="$(tmux_job_state "$TR_FAST")"
+  tmux kill-session -t "$TR_FAST" 2>/dev/null || true   # teardown before asserting
+
+  assert_rc 0 "$rc" "tmux-run accepts an immediately-exiting command" \
+    "A fast command must dispatch like any other; see bin/tmux-run.sh."
+  assert_contains "$f_out" "status=created" "tmux-run reports status=created for a fast command" \
+    "The atomic create+set-option invocation must still report 'created'."
+  assert_eq 1 "$f_dead" "fast command leaves a DEAD pane, not a vanished session" \
+    "remain-on-exit must be armed in the SAME tmux invocation as new-session (issue #54) — \
+otherwise a sub-second command destroys its window before the option lands."
+  assert_eq "dead" "$f_state" "tmux_job_state classifies the finished fast run as 'dead', not 'absent'" \
+    "The inspectable-dead-session invariant (design.md -> Liveness caveat) is broken."
+
+  # `-w`-unsupported branch (issue #54 review): tmux parses a whole command list BEFORE
+  # executing any of it, so a set-option flag the installed tmux doesn't know rejects the
+  # list wholesale and new-session never runs. The fallback must therefore re-issue the
+  # CREATE with the session-scoped form — a bare `set-option` retry can never reach a
+  # session that was never created, and the dispatch would die instead of degrading.
+  # Simulated with a PATH shim that rejects exactly `set-option … -w …` the way a pre-2.6
+  # tmux would, and passes every other invocation through to the real binary.
+  TMUX_REAL="$(command -v tmux)"
+  mkdir -p "$SB/shim"
+  cat > "$SB/shim/tmux" <<SHIM
+#!/usr/bin/env bash
+# Pretend to be a tmux whose set-option has no -w flag: reject the whole list, run nothing.
+saw_setopt=0; saw_w=0
+for a in "\$@"; do
+  [ "\$a" = "set-option" ] && saw_setopt=1
+  [ "\$a" = "-w" ]         && saw_w=1
+done
+if [ "\$saw_setopt" = 1 ] && [ "\$saw_w" = 1 ]; then
+  echo "command set-option: unknown flag -w" >&2
+  exit 1
+fi
+exec "$TMUX_REAL" "\$@"
+SHIM
+  chmod +x "$SB/shim/tmux"
+
+  TR_OLD="derail-owner-demo-repo-9"
+  tmux kill-session -t "$TR_OLD" 2>/dev/null || true
+  rc=0
+  o_out="$(PATH="$SB/shim:$PATH" "$TMUXRUN" zz-smoke 9 -- sh -c 'echo started; sleep 60' 2>&1)" || rc=$?
+  o_exists=0; tmux has-session -t "$TR_OLD" 2>/dev/null && o_exists=1
+  o_opt="$(tmux show-options -t "$TR_OLD" remain-on-exit 2>/dev/null || true)"
+  tmux kill-session -t "$TR_OLD" 2>/dev/null || true   # teardown before asserting
+
+  assert_rc 0 "$rc" "a tmux without 'set-option -w' still dispatches (no hard die)" \
+    "Failing to arm remain-on-exit must never fail the dispatch. tmux rejects an unknown \
+flag at PARSE time, so the fallback must re-issue new-session too, not just set-option."
+  assert_contains "$o_out" "status=created" "the -w fallback still reports status=created" \
+    "The session-scoped fallback list must create the session, not fall through to the \
+existing-session/reconcile path."
+  assert_eq 1 "$o_exists" "the -w fallback actually creates the session" \
+    "With -w rejected at parse time the first list creates nothing; the OR'd second \
+complete list (new-session ... \\; set-option -t ...) is what creates it."
+  assert_contains "$o_opt" "remain-on-exit on" "the -w fallback still arms remain-on-exit" \
+    "The session-scoped set-option form must leave remain-on-exit on."
 fi

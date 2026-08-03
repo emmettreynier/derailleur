@@ -96,6 +96,7 @@ if [ "$DRY" = 1 ]; then
   else
     would="tmux new-session -d -s $NAME '<cmd> 2>&1 | tee $(printf '%q' "$LOG")'"
   fi
+  would="$would \\; set-option -w -t $NAME remain-on-exit on"   # armed in the same invocation
   cat <<INFO
 # DRY RUN — tmux-run for $REPO issue #$ISSUE
 #   manifest : $MANIFEST
@@ -125,17 +126,41 @@ WRAPPED="${CMD_STR}2>&1 | tee $(printf '%q' "$LOG")"
 # colliding create fails on the name. We do NOT probe-then-create (that has a race) and
 # we NEVER create a second session under another name — on failure we report the
 # existing one. A new-session failure with NO such session is a genuine tmux error.
-if tmux new-session -d -s "$NAME" "$WRAPPED" 2>/dev/null; then
-  # Keep a finished session lingering as a DEAD pane so a reconciling worker can see
-  # 'exists-dead' + read the log, instead of the session silently vanishing on
-  # completion. Best-effort across tmux versions (window- vs pane-scoped option).
-  tmux set-option -w -t "$NAME" remain-on-exit on 2>/dev/null \
-    || tmux set-option -t "$NAME" remain-on-exit on 2>/dev/null || true
+#
+# WHY `remain-on-exit` IS ARMED IN THE SAME tmux INVOCATION AS THE CREATE (issue #54 —
+# do NOT re-split this into two calls): the option keeps a finished session lingering as
+# a DEAD pane, so a reconciling worker sees 'exists-dead' and can read the log instead of
+# the session silently vanishing on completion. tmux runs a command list to completion
+# before its event loop reaps the pane's exit, so `\; set-option` here is armed before
+# the command can finish. As two separate calls there is a window in which a command that
+# exits in milliseconds takes its window — and the whole session — down with it: the run
+# then reads as `absent`, making "finished" indistinguishable from "never ran" and the
+# `#{pane_dead}` liveness test undecidable (design.md → Liveness caveat).
+#
+# WHY TWO COMPLETE LISTS OR'd, rather than one list with a `\; set-option` fallback
+# appended: tmux PARSES a whole command list before executing any of it, so a
+# `set-option` flag the installed tmux doesn't know (`-w` predates tmux 2.6 but isn't
+# universal) rejects the list wholesale and `new-session` NEVER RUNS. A fallback inside
+# the same list is therefore unreachable, and the create would be lost entirely — the
+# dispatch would die at the "(tmux error)" below. So the fallback re-issues the *create*
+# too, with the version-agnostic session-scoped form (which arms the window option all
+# the same). The mutex is unchanged: in a genuine collision BOTH attempts fail on the
+# name and create nothing, so control still falls through to the existing-session branch.
+if tmux new-session -d -s "$NAME" "$WRAPPED" \; \
+     set-option -w -t "$NAME" remain-on-exit on 2>/dev/null \
+   || tmux new-session -d -s "$NAME" "$WRAPPED" \; \
+        set-option -t "$NAME" remain-on-exit on 2>/dev/null; then
   printf 'tmux-run: status=created name=%s log=%s\n' "$NAME" "$LOG"
   exit 0
 fi
 
 if tmux has-session -t "$NAME" 2>/dev/null; then
+  # Best-effort arming of a session we did not create. Both create attempts above failed
+  # while the session exists, so the mutex reading applies unchanged: someone else owns
+  # it, and we report theirs rather than spawning a duplicate. Arming an already-armed
+  # session is a no-op; the session-scoped form is used because it's the one every tmux
+  # accepts, and — as before — failing to arm never fails the dispatch.
+  tmux set-option -t "$NAME" remain-on-exit on 2>/dev/null || true
   # Classify: any dead pane (command finished, session kept by remain-on-exit) => dead.
   dead="$(tmux list-panes -t "$NAME" -F '#{pane_dead}' 2>/dev/null | head -1)"
   if [ "$dead" = 1 ]; then st="exists-dead"; else st="exists-alive"; fi
