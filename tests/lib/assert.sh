@@ -40,6 +40,18 @@ fail() {
 # Each takes a trailing (desc, hint) pair used for PASS/FAIL messaging. They call
 # pass on success and fail (which exits) on failure, so a test reads top-to-bottom
 # with no manual rc bookkeeping.
+#
+# The three grep-based helpers below feed the haystack in on a HERESTRING, never
+# `printf … | grep`. That is load-bearing, not style: `grep -q` exits the instant it
+# matches, which closes the pipe, which hands the still-writing `printf` an EPIPE —
+# and since every test file runs under `set -o pipefail`, that nonzero leftmost
+# status becomes the pipeline's, so the `if` takes the *else* branch and reports
+# FAIL for a needle that was actually found. It only fires when the haystack exceeds
+# the pipe buffer and the needle sits far enough in for grep to still be reading, so
+# it presents as a flaky test rather than a broken one — observed on a `pull_request`
+# CI run failing `test-checker-rounds.sh` (`printf: write error: Broken pipe`, then
+# FAIL) while the `push` run on the *same commit* passed. A herestring is a temp
+# file, so no reader can ever close it early. Do not "simplify" these back to a pipe.
 
 # assert_eq EXPECTED ACTUAL DESC [HINT]
 assert_eq() {
@@ -55,19 +67,19 @@ assert_ne() {
 
 # assert_contains HAYSTACK NEEDLE DESC [HINT]   (fixed-string, not regex)
 assert_contains() {
-  if printf '%s' "$1" | grep -qF -- "$2"; then pass "$3"
+  if grep -qF -- "$2" <<<"$1"; then pass "$3"
   else fail "$3 (output did not contain '$2')" "${4:-}"; fi
 }
 
 # assert_not_contains HAYSTACK NEEDLE DESC [HINT]
 assert_not_contains() {
-  if printf '%s' "$1" | grep -qF -- "$2"; then fail "$3 (output unexpectedly contained '$2')" "${4:-}"
+  if grep -qF -- "$2" <<<"$1"; then fail "$3 (output unexpectedly contained '$2')" "${4:-}"
   else pass "$3"; fi
 }
 
 # assert_matches HAYSTACK ERE DESC [HINT]       (extended regex)
 assert_matches() {
-  if printf '%s' "$1" | grep -qE -- "$2"; then pass "$3"
+  if grep -qE -- "$2" <<<"$1"; then pass "$3"
   else fail "$3 (output did not match /$2/)" "${4:-}"; fi
 }
 
