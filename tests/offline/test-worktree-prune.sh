@@ -74,24 +74,29 @@ else
   LIVE_S=derail-owner-demo-repo-12    # worker still waiting on real compute
   KEEP_S=zz-not-ours                  # someone else's session — none of our business
 
-  tmux new-session -d -s "$KEEP_S" 'sleep 300'
-  tmux new-session -d -s "$LIVE_S" 'sleep 300'
-  # Mirror tmux-run.sh: create, then set remain-on-exit so the finished pane lingers.
-  # The command sleeps briefly so the option lands before it exits.
-  tmux new-session -d -s "$DEAD_S" 'sleep 1'
-  tmux set-option -w -t "$DEAD_S" remain-on-exit on 2>/dev/null \
-    || tmux set-option -t "$DEAD_S" remain-on-exit on 2>/dev/null || true
-
-  # Wait for the short command to finish so the pane is genuinely dead (bounded).
-  i=0
-  while [ "$i" -lt 40 ]; do
-    d="$(tmux list-panes -t "$DEAD_S" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
-    [ "$d" = 1 ] && break
-    sleep 0.25; i=$((i+1))
-  done
-  if [ "${d:-}" != 1 ]; then
+  # Stand up the fixture. Every step is allowed to fail into a SKIP rather than a FAIL:
+  # a CI host can have the tmux binary but no environment a server will start in, and a
+  # tmux build that ignores remain-on-exit would leave no dead session to reap. Neither
+  # is a defect in the code under test.
+  d=""
+  if tmux new-session -d -s "$KEEP_S" 'sleep 300' 2>/dev/null \
+     && tmux new-session -d -s "$LIVE_S" 'sleep 300' 2>/dev/null \
+     && tmux new-session -d -s "$DEAD_S" 'sleep 1' 2>/dev/null; then
+    # Mirror tmux-run.sh: create, THEN set remain-on-exit so the finished pane lingers.
+    # The command sleeps briefly so the option lands before it exits.
+    tmux set-option -w -t "$DEAD_S" remain-on-exit on 2>/dev/null \
+      || tmux set-option -t "$DEAD_S" remain-on-exit on 2>/dev/null || true
+    # Wait for the short command to finish so the pane is genuinely dead (bounded).
+    i=0
+    while [ "$i" -lt 40 ]; do
+      d="$(tmux list-panes -t "$DEAD_S" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
+      [ "$d" = 1 ] && break
+      sleep 0.25; i=$((i+1))
+    done
+  fi
+  if [ "$d" != 1 ]; then
     tmux kill-server 2>/dev/null || true
-    skip "tmux did not honor remain-on-exit here — skipping the reaper cases"
+    skip "no usable private tmux server / no remain-on-exit here — skipping the reaper cases"
   else
     have_session() { tmux has-session -t "$1" 2>/dev/null && echo yes || echo no; }
 
