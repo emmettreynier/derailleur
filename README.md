@@ -17,8 +17,11 @@ work, and you engage in batched, per-project review windows instead.
 
 GitHub is the only source of truth (issues, PRs, labels, comments, board fields) — the
 ledger, logs, and digest are disposable derivatives regenerated from it, so a crash
-loses nothing. A human merge gate is non-negotiable: nothing in this system merges a
-PR, that's always you.
+loses nothing. A human merge gate is non-negotiable: no agent here merges a PR on its
+own initiative, and the *decision* to merge is always yours. The only path to a merge
+is your explicit instruction — you click merge, or you tell the human-gated
+interactive orchestrator to merge a PR you name, in-session. The autonomous loop never
+merges, under any condition.
 
 Why "derailleur"? Well, mostly just because I like bikes. Maybe there is some deep metaphor
 related to the shifting mechanism which allows a cyclist to ride at similar effort 
@@ -229,7 +232,9 @@ loads board state and proposes what to dispatch, acting only on your explicit OK
 
 Rendered into `~/.claude/commands/` by `install.sh` (the one `~/.claude/` carve-out).
 It **proposes, then dispatches workers and checkers only after you confirm** — never
-autonomously, and it never merges. Its tools are scoped to the board digest, the two
+autonomously, and it never merges on its own initiative: a `checked-pass` PR is
+surfaced, not acted on, unless you instruct the merge in-session naming that PR (one
+instruction, exactly that PR). Its tools are scoped to the board digest, the two
 launchers, read-only `gh`, and the `Monitor` + `watch-dispatch` tools (so it can watch
 the workers/checkers it dispatched to completion without blocking your session). For a
 session booted from
