@@ -18,11 +18,24 @@
 #   (no args)   run the full suite (offline + online)
 #   --offline   run only the offline tier (what CI uses)
 #
+# WORKTREE GUARD: `dr test` reaches this script through the ~/.local/bin/derailleur
+# symlink into the INSTALL checkout, so $ORCH — and hence tests/ — is that checkout no
+# matter where you stand. Run from inside a *different* derailleur checkout (a worktree)
+# it would test the wrong tree while reporting a green tally for code that never ran
+# (issue #50). So it refuses there and names `./bin/test.sh` instead; and every run,
+# refused or not, opens by stating which tree it is testing.
+#
 # See the README "Verify / test suite" section.
 set -uo pipefail   # NOT -e: the runner manages per-file exit codes itself.
 
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TESTS="$ORCH/tests"
+
+# The original argv, as a string, so the refusal can echo back the exact corrective
+# command. Built as a string rather than an array: expanding an empty array under
+# `set -u` is fatal on bash 3.2 (see CLAUDE.md).
+ARGS_STR=""
+for a in "$@"; do ARGS_STR="$ARGS_STR $a"; done
 
 OFFLINE_ONLY=0
 for a in "$@"; do
@@ -34,6 +47,56 @@ for a in "$@"; do
     *) echo "test.sh: unknown arg: $a (use --offline)" >&2; exit 2 ;;
   esac
 done
+
+# --- tree-under-test banner + worktree guard ----------------------------------
+# count_tests DIR — echo how many test-*.sh files DIR holds (0 if it has none/absent).
+count_tests() {
+  local dir="$1" n=0 f
+  shopt -s nullglob
+  for f in "$dir"/test-*.sh; do n=$((n + 1)); done
+  shopt -u nullglob
+  printf '%s' "$n"
+}
+
+# is_derailleur_checkout DIR — true when DIR looks like a derailleur checkout. Kept as
+# an explicit if/return (not a bare short-circuit) per CLAUDE.md.
+is_derailleur_checkout() {
+  if [ -f "$1/bin/test.sh" ] && [ -f "$1/bin/derailleur" ] && [ -d "$1/tests/offline" ]; then
+    return 0
+  fi
+  return 1
+}
+
+banner="testing $ORCH ($(count_tests "$TESTS/offline") files in tests/offline"
+if [ "$OFFLINE_ONLY" -eq 0 ]; then
+  banner="$banner, $(count_tests "$TESTS/online") in tests/online"
+fi
+echo "$banner)"
+
+# Refuse only when the cwd is inside a *different* derailleur checkout. A cwd that is
+# unrelated to any derailleur checkout — another project's repo, $HOME, /tmp — or not a
+# git work tree at all is the normal operator invocation and must keep working.
+cwd_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$cwd_top" ] && is_derailleur_checkout "$cwd_top"; then
+  # Compare PHYSICAL paths so a symlinked route to the same tree doesn't read as a
+  # different checkout.
+  cwd_phys="$(cd "$cwd_top" && pwd -P)"
+  orch_phys="$(cd "$ORCH" && pwd -P)"
+  if [ "$cwd_phys" != "$orch_phys" ]; then
+    {
+      echo "test.sh: refusing to run — you are standing in a different derailleur checkout."
+      echo "  you are in:        $cwd_phys"
+      echo "  this would test:   $orch_phys"
+      echo
+      echo "\`dr test\` resolves through the ~/.local/bin symlink to the install checkout, so it"
+      echo "would test that tree and report a green tally for the code you actually changed"
+      echo "never having run. Run the suite from this tree instead:"
+      echo
+      echo "  ./bin/test.sh$ARGS_STR"
+    } >&2
+    exit 2
+  fi
+fi
 
 [ -d "$TESTS" ] || { echo "test.sh: no tests/ dir at $TESTS" >&2; exit 2; }
 

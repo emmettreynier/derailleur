@@ -81,6 +81,12 @@ Self-verify before marking ready and attest to each in the results-summary:
 4. Docs currency: affected docs (README, CLAUDE.md, …) updated, OR a one-line "no docs needed"
    reason.
 
+Running a test suite from this worktree: use the repo-local entry point, not an installed
+CLI. When the repo you are working in IS derailleur, that means `./bin/test.sh [--offline]`
+from this worktree — `dr test` resolves through the `~/.local/bin` symlink to the *primary*
+checkout, so it would test that tree, not your branch (it now refuses and says so, but the
+local invocation is the one to reach for).
+
 Finishing
 - Mark the PR ready; ensure it references "Closes #{{ISSUE}}", using this results-summary
   format:
