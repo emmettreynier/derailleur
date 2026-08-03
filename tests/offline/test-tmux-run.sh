@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # test-tmux-run.sh (offline) — tmux-run.sh name/log derivation, --tail validation,
-# {{SLUG}} token wiring, and the atomic-create mutex. Migrated from smoke-test.sh
-# check (f). The dry-run + static-wiring halves are deterministic and offline; the
-# live mutex half needs tmux and SKIPs cleanly when it's absent. No network, nothing
-# spent.
+# {{SLUG}} token wiring, the atomic-create mutex, and the inspectable-dead-session
+# invariant for a fast-exiting command. Migrated from smoke-test.sh check (f). The
+# dry-run + static-wiring halves are deterministic and offline; the live half needs
+# tmux and SKIPs cleanly when it's absent. No network, nothing spent.
 set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$TEST_DIR/../lib/assert.sh"
@@ -76,4 +76,39 @@ else
     "A colliding create must report the existing session, never create a second."
   assert_eq 1 "$logsz" "durable log written (non-empty) at <data_root>/logs" \
     "The tee'd log path (2>&1 | tee <log>) is broken in bin/tmux-run.sh."
+
+  # fast-exit case (issue #54): a command that finishes in milliseconds must STILL leave
+  # an inspectable session whose pane is dead. remain-on-exit has to be armed in the same
+  # tmux invocation as the create; split across two calls the pane exits in the gap, the
+  # session vanishes, and `dead` collapses into `absent` — "finished" becomes
+  # indistinguishable from "never ran".
+  TR_FAST="derail-owner-demo-repo-8"
+  tmux kill-session -t "$TR_FAST" 2>/dev/null || true
+  rc=0; f_out="$("$TMUXRUN" zz-smoke 8 -- true 2>&1)" || rc=$?
+  # Poll for the pane to finish — the assertion is that it dies *and stays inspectable*,
+  # not how quickly. Bail out early if the session disappears (that IS the regression).
+  n=0; f_dead=""
+  while [ "$n" -lt 40 ]; do
+    if ! tmux has-session -t "$TR_FAST" 2>/dev/null; then f_dead="gone"; break; fi
+    f_dead="$(tmux list-panes -t "$TR_FAST" -F '#{pane_dead}' 2>/dev/null | head -1)"
+    if [ "$f_dead" = 1 ]; then break; fi
+    sleep 0.25; n=$((n + 1))
+  done
+  # Classify it the way every consumer does — through dispatch-common's tmux_job_state.
+  # A sandboxed COPY, per test-finalize-complete.sh: sourcing the real file would let an
+  # offline test write state/ into the operator's live checkout.
+  sandbox_copy_script "$SB" dispatch-common
+  . "$SB/bin/dispatch-common.sh"
+  f_state="$(tmux_job_state "$TR_FAST")"
+  tmux kill-session -t "$TR_FAST" 2>/dev/null || true   # teardown before asserting
+
+  assert_rc 0 "$rc" "tmux-run accepts an immediately-exiting command" \
+    "A fast command must dispatch like any other; see bin/tmux-run.sh."
+  assert_contains "$f_out" "status=created" "tmux-run reports status=created for a fast command" \
+    "The atomic create+set-option invocation must still report 'created'."
+  assert_eq 1 "$f_dead" "fast command leaves a DEAD pane, not a vanished session" \
+    "remain-on-exit must be armed in the SAME tmux invocation as new-session (issue #54) — \
+otherwise a sub-second command destroys its window before the option lands."
+  assert_eq "dead" "$f_state" "tmux_job_state classifies the finished fast run as 'dead', not 'absent'" \
+    "The inspectable-dead-session invariant (design.md -> Liveness caveat) is broken."
 fi
