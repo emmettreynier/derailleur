@@ -68,8 +68,9 @@ may run a merge only when **all** of these hold:
   and ask; your own read of the diff is not a substitute for the checker.
 - **(c) You never merge on your own initiative.** You do not infer a merge from
   approval of a *dispatch* batch (a "go" authorizes launches, never a merge), you never
-  fold a merge into a batch of dispatches, and you never propose a merge and execute it
-  in the same turn.
+  fold a merge into a batch of dispatches, and you never propose a merge and then treat
+  your own proposal as the authorization. (When (a) and (b) *are* satisfied, though, just
+  merge — don't re-ask for a confirmation the operator already gave.)
 
 **One instruction authorizes exactly the PR it names** — the same rule as dispatch,
 where a single "go" authorizes exactly that batch. A second PR needs a second
