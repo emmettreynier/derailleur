@@ -96,7 +96,12 @@ with a re-dispatch hint / an `incomplete-waiting` checker reporting a written ve
 *and* the live session, plus malformed/no-arg rejection); the `dispatch-common.sh`
 completion gate (`tmux_job_state`'s pane-dead liveness and `assert_finalized`'s
 per-role reason battery — including the "finished tmux session still counts as done"
-regression net and the no-false-`incomplete`-on-`gh`-failure guard);
+regression net and the no-false-`incomplete`-on-`gh`-failure guard), and both checker
+round comments it posts (`**Checker interrupted:` / `**Checker incomplete:`, and
+nothing at all on a clean finish); the checker-round cap (`CHECKER_ROUND_LEADS` covers
+every lead the poster emits, interrupted and incomplete rounds share one cap, only a
+to-operator verdict resets a generation, and `CHECKER_LIMIT` trailing interrupted
+rounds trip the escalation while one fewer does not);
 `tmux-run.sh` name/log derivation, `--tail` validation, `{{SLUG}}` wiring,
 and (when `tmux` is present) the atomic-create mutex; the `scheduled_repos` allow-list
 reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` on an
@@ -274,7 +279,7 @@ Tunable by env var, e.g. `WORKER_BUDGET=6 dr orchestrator-cycle`:
 | `MODEL` | `sonnet` | Orchestrator session model. It only reads the digest and routes, so it's pinned cheap — and pinned at all, so a cycle never inherits whatever expensive model your interactive sessions default to. Resolution: `MODEL` env → `ORCHESTRATOR_MODEL` in `orchestrator.conf` → `sonnet`, so set a persistent per-operator default in the conf and still override per-run with the env var. |
 | `WORKER_BUDGET` | `10.00` | Per-worker session budget (USD). |
 | `CHECKER_BUDGET` | `3.00` | Per-checker session budget (USD). |
-| `CHECKER_LIMIT` | `4` | Max checker rounds per review generation before escalating to `needs-input`. |
+| `CHECKER_LIMIT` | `4` | Max checker rounds per review generation before escalating to `needs-input` — a round is a verdict, an `incomplete` finish, or an `interrupted` one (all three leave a comment the cap counts). Only a to-operator verdict (`pass` / `pass_with_findings` / `blocked`) ends a generation and resets it. |
 | `WORKER_LIMIT` | `4` | Max consecutive worker attempts with no clean finish before escalating to `needs-input` — counts every `interrupted-*` (cut off) and every `incomplete-*` reason *except* `waiting`. |
 | `WORKER_WAIT_LIMIT` | `10` | The same backstop for the `incomplete-waiting` class alone (a worker that exited cleanly while its detached `dr tmux-run` job keeps going). Looser because the retry just reattaches, sees the job running, and exits for cents — where an `interrupted-*` retry already burned a full `WORKER_BUDGET`. Still capped: a job that is alive but never finishes must not re-dispatch forever. |
 

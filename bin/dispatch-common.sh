@@ -16,6 +16,10 @@
 #
 # Ledger status vocabulary: dispatched | done | incomplete-* | interrupted-* | unknown.
 # Consumers prefix-match `incomplete*` exactly as they do `interrupted*`.
+#
+# It also owns the CHECKER ROUND VOCABULARY (`CHECKER_ROUND_LEADS` +
+# `checker_rounds_this_generation` below) — the leads this file posts and the counter
+# orchestrator-cycle.sh reads them with, kept in one place so they cannot drift.
 
 # classify_result <log> -> echoes: done | interrupted-ratelimit | interrupted-budget
 #   | interrupted-error | unknown.  Parses the final JSON result line in the log.
@@ -262,6 +266,50 @@ assert_finalized() {
   return 0
 }
 
+# CHECKER_ROUND_LEADS — the ONE enumeration of every comment lead that constitutes a
+# checker round on a PR (issue #52). Two of the three are posted by finalize_dispatch
+# below (`incomplete` / `interrupted`); the third is posted by the checker itself
+# (`**Checker verdict:`, see briefs/checker-brief.md). orchestrator-cycle.sh counts
+# rounds through checker_rounds_this_generation, which reads THIS list — so a lead can
+# never be added to the poster without the counter seeing it, the failure that left an
+# interrupted checker uncountable and re-checked every cycle forever.
+#
+# Newline-separated string, not an array: it has to cross into python, and a bash 3.2
+# array under `set -u` is the wrong tool for a value that is never empty (CLAUDE.md).
+CHECKER_ROUND_LEADS='**Checker verdict:
+**Checker incomplete:
+**Checker interrupted:'
+
+# checker_rounds_this_generation — reads `gh pr view <pr> --json comments` JSON on
+# STDIN, echoes how many checker rounds sit in the CURRENT review generation.
+#
+# Rounds are counted PER GENERATION, not over the PR's lifetime: a to-operator verdict
+# (pass / pass_with_findings / blocked) hands the ball to the operator and ends a
+# generation, so only rounds AFTER the most recent one count. `changes_requested` /
+# `fail` keeps the ball worker-side and does NOT end a generation — and neither an
+# `incomplete` nor an `interrupted` round can, since neither decided anything.
+#
+# Fails soft: unreadable/unparseable input echoes 0 (never escalate on a flaky `gh`).
+checker_rounds_this_generation() {
+  CHECKER_ROUND_LEADS="$CHECKER_ROUND_LEADS" python3 -c '
+import sys, json, os, re
+leads = tuple(l for l in os.environ["CHECKER_ROUND_LEADS"].split("\n") if l)
+try:
+    comments = json.load(sys.stdin).get("comments", [])
+except Exception:
+    print(0); sys.exit()
+rounds = [b for b in ((c.get("body") or "") for c in comments) if b.startswith(leads)]
+to_operator = {"pass", "pass_with_findings", "blocked"}   # verdicts that end a generation
+last_handoff = -1
+for i, b in enumerate(rounds):
+    m = re.match(r"\*\*Checker verdict:\s*`?\s*([a-z_]+)", b, re.I)
+    if (m.group(1).lower() if m else "") in to_operator:
+        last_handoff = i
+print(len(rounds) - (last_handoff + 1))
+' 2>/dev/null || echo 0
+  return 0
+}
+
 # finalize_dispatch <log> <ledger> <pid> <worktree> <kind> — run AFTER the claude
 # process exits: classify the outcome, record it in the ledger, and on anything short
 # of a clean finish warn loudly + push commits the re-dispatch would otherwise strand.
@@ -307,10 +355,15 @@ finalize_dispatch() {
   # Leave a durable, countable trail on the issue/PR — the same comment-is-signal
   # convention the checker uses for its verdicts (`**Checker verdict: …`). The caps
   # count these: ledger-prune.sh's WORKER_LIMIT counts trailing `**Worker interrupted:`
-  # AND `**Worker incomplete:` comments; orchestrator-cycle.sh's NROUNDS counts
-  # `**Checker verdict:` AND `**Checker incomplete:`. Without that, an exit-to-wait
-  # produced NEITHER signal and a wedged job re-dispatched every cycle forever with no
-  # path to needs-input (issue #40).
+  # AND `**Worker incomplete:` comments; orchestrator-cycle.sh's NROUNDS counts every
+  # lead in CHECKER_ROUND_LEADS above. Without that, an exit-to-wait produced NEITHER
+  # signal and a wedged job re-dispatched every cycle forever with no path to
+  # needs-input (issue #40).
+  #
+  # BOTH ROLES POST BOTH LEADS (issue #52). The checker used to post `incomplete` only,
+  # so an interrupted checker — rate-limiting being the likeliest cause, i.e. the common
+  # case — left nothing countable and the same PR was re-checked every cycle at a full
+  # CHECKER_BUDGET with CHECKER_LIMIT frozen at zero. Same hole #40 closed worker-side.
   local lead="interrupted"
   case "$st" in incomplete-*) lead="incomplete" ;; esac
   local repo; repo="$(_worktree_repo "$worktree")"
@@ -328,14 +381,19 @@ finalize_dispatch() {
       gh issue comment "$issue" -R "$repo" --body "$body" \
         >>"$log" 2>&1 || echo "  ⚠ could not post $lead comment on $repo#$issue" >&2
     fi
-  elif [ "$kind" = "checker" ] && [ "$lead" = "incomplete" ]; then
+  elif [ "$kind" = "checker" ]; then
     # PR number comes from the LOG basename, not the branch: a checker runs in the
     # worker's `issue-N` worktree, so the branch names the issue, not the PR.
     local pr; pr="$(_log_dispatch_num "$log")"
     if [ -n "$repo" ] && [ -n "$pr" ]; then
-      gh pr comment "$pr" -R "$repo" \
-        --body "**Checker incomplete: $st**${push_note}. The session exited cleanly but wrote no usable verdict (first unmet check: \`${st#incomplete-}\`). No verdict was recorded, so this round decided nothing; repeated incomplete rounds count toward \`CHECKER_LIMIT\` and escalate to \`needs-input\`." \
-        >>"$log" 2>&1 || echo "  ⚠ could not post incomplete comment on $repo#$pr" >&2
+      local cbody
+      if [ "$lead" = "incomplete" ]; then
+        cbody="**Checker incomplete: $st**${push_note}. The session exited cleanly but wrote no usable verdict (first unmet check: \`${st#incomplete-}\`). No verdict was recorded, so this round decided nothing; repeated rounds without a to-operator verdict count toward \`CHECKER_LIMIT\` and escalate to \`needs-input\`."
+      else
+        cbody="**Checker interrupted: $st**${push_note}. The session was cut off before it could write a verdict (rate limit, budget cap, or crash). Not a failure by itself — the orchestrator re-checks this PR next cycle; but no verdict was recorded, so this round decided nothing, and repeated rounds without a to-operator verdict count toward \`CHECKER_LIMIT\` and escalate to \`needs-input\`."
+      fi
+      gh pr comment "$pr" -R "$repo" --body "$cbody" \
+        >>"$log" 2>&1 || echo "  ⚠ could not post $lead comment on $repo#$pr" >&2
     fi
   fi
 }
