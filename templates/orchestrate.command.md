@@ -41,7 +41,13 @@ research work, from whatever repo this session is running in. Scope: `$ARGUMENTS
   PRs you'd send a checker to, one-line reason each, plus anything in the "Needs
   the operator" bucket that needs their input. Then **stop and wait for an
   explicit "go"** before running any `launch-*` command. Never dispatch
-  autonomously, and never merge — the human merge gate is theirs alone.
+  autonomously, and never merge on your own initiative — the merge *decision* is
+  theirs alone. The one merge path is the brief's "Merging on explicit instruction":
+  they instruct it in-session naming the PR, it is `checked-pass` (or they waive
+  that), and one instruction authorizes exactly that PR. A `checked-pass` PR with no
+  such instruction is surfaced, never acted on. `gh pr merge` is deliberately **not**
+  pre-approved in this command's `allowed-tools`, so the merge itself still surfaces a
+  permission prompt naming the exact command — a second, harness-level confirmation.
 - **Fire the approved batch in ONE turn, then watch automatically.** On "go",
   dispatch every approved `launch-*` in a single turn (parallel tool calls) and arm
   the watch in that same turn — do not serialize launch → confirm → launch, and do

@@ -58,10 +58,18 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   leading HTML comment so the YAML frontmatter is the first line** (a command with a
   comment before its frontmatter won't parse). Keep the repo copy path-free — the
   only absolute path appears in the install-rendered output, never in the diff.
-- Run `dr test` (the two-tier suite under `tests/`; `dr test --offline` for the
+- **Inside a worktree, run the suite as `./bin/test.sh [--offline]`, never `dr test`.**
+  `dr` resolves through the `~/.local/bin` symlink to the *install* checkout, so from a
+  worktree `dr test` would test the primary checkout's `tests/` — your branch's new and
+  modified tests never run, and it used to report a green tally anyway (issue #50).
+  `bin/test.sh` now refuses that case by name, and every run opens with a
+  `testing <path> (N files in tests/offline)` banner; from anywhere *outside* a
+  derailleur checkout `dr test` is still the right command.
+- Run the suite (`./bin/test.sh`; the two-tier suite under `tests/`, `--offline` for the
   deterministic tier CI runs) after touching any `bin/` logic it covers —
   `config-common.sh`, the dispatcher, `watch-dispatch.sh`, `tmux-run.sh`,
-  `schedule.sh` enable/disable, `worktree-prune.sh`, `ledger-prune.sh`. For behavior
+  `schedule.sh` enable/disable, `worktree-prune.sh`, `ledger-prune.sh`, `test.sh`'s own
+  worktree guard. For behavior
   the suite doesn't cover, a script's `--dry-run` output and `logs/cycle.log` are the
   fallback for checking correctness. When you change one of those scripts, extend the
   matching `tests/offline/test-*.sh` rather than leaving the check to `--dry-run`

@@ -26,8 +26,10 @@ assert_file_present "$REPO_ROOT/bin/dispatch-common.sh" "bin/dispatch-common.sh 
 #   FAKE_GH_MODE      nopr | draft | ready | fail | garbage   (`gh pr list`)
 #   FAKE_GH_MERGEABLE conflicting | mergeable | unknown | unknown-then-mergeable
 #                     | weird | fail | garbage                (`gh pr view --json mergeable`)
-#   FAKE_GH_CALLS     path of a file the shim appends every invocation's args to, so a
-#                     test can assert a lookup did (or did NOT) happen
+#   GH_CALLS          path of a file the shim appends every invocation's args to, so a
+#                     test can assert what was posted, and that a lookup did (or did
+#                     NOT) happen. ONE variable for both — issues #51 and #52 each grew
+#                     a shim against this file and they must not fork again.
 SHIMS="$(sandbox_tmp)"
 
 cat >"$SHIMS/tmux" <<'SH'
@@ -47,13 +49,18 @@ chmod +x "$SHIMS/tmux"
 cat >"$SHIMS/gh" <<'SH'
 #!/usr/bin/env bash
 # Two lookups are exercised: `gh pr list … --json isDraft,number` (FAKE_GH_MODE) and
-# `gh pr view N --json mergeable` (FAKE_GH_MERGEABLE). Anything else is a no-op.
+# `gh pr view N --json mergeable` (FAKE_GH_MERGEABLE); the comment posts are no-ops.
+# Every invocation is appended to $GH_CALLS (when set) first, so a test can assert both
+# what finalize_dispatch posted and how many mergeability polls it made.
 prior=0
-if [ -n "${FAKE_GH_CALLS:-}" ]; then
-  prior="$(grep -c '^pr view' "$FAKE_GH_CALLS" 2>/dev/null || true)"
+if [ -n "${GH_CALLS:-}" ]; then
+  prior="$(grep -c '^pr view' "$GH_CALLS" 2>/dev/null || true)"
   prior="${prior:-0}"
-  echo "$*" >>"$FAKE_GH_CALLS"
+  printf '%s\n' "$*" >>"$GH_CALLS"
 fi
+case "$1 ${2:-}" in
+  "pr comment"|"issue comment") exit 0 ;;
+esac
 if [ "${1:-}" = "pr" ] && [ "${2:-}" = "view" ]; then
   case "${FAKE_GH_MERGEABLE:-mergeable}" in
     conflicting) echo '{"mergeable":"CONFLICTING"}' ;;
@@ -194,19 +201,19 @@ assert_contains "$gh_note" "skipping nopr/draft checks" "the skipped PR lookup i
 # rung) and asserts ONLY on an explicit CONFLICTING, because GitHub computes
 # `mergeable` asynchronously and answers UNKNOWN for a few seconds after every push —
 # a strict check would stamp incomplete on healthy work whenever the API lagged.
-export FAKE_GH_CALLS="$(sandbox_tmp)/gh-calls.txt"
-: >"$FAKE_GH_CALLS"
-pr_views() { grep -c '^pr view' "$FAKE_GH_CALLS" 2>/dev/null || true; }
+export GH_CALLS="$(sandbox_tmp)/gh-calls.txt"
+: >"$GH_CALLS"
+pr_views() { grep -c '^pr view' "$GH_CALLS" 2>/dev/null || true; }
 
 # explicit CONFLICTING -> the one case that asserts.
-: >"$FAKE_GH_CALLS"
+: >"$GH_CALLS"
 assert_eq "conflicting" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=conflicting \
   assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
   "worker whose ready PR is CONFLICTING -> conflicting" \
   "An explicit mergeable==CONFLICTING must assert the new last rung (issue #51)."
 
 # MERGEABLE -> finalized, and the lookup does not retry once it has a real answer.
-: >"$FAKE_GH_CALLS"
+: >"$GH_CALLS"
 assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=mergeable \
   assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
   "worker whose ready PR is MERGEABLE -> finalized (no reason)" \
@@ -217,7 +224,7 @@ assert_eq "1" "$(pr_views)" "a decisive first answer is not re-polled" \
 # UNKNOWN first, then MERGEABLE — the realistic immediate-post-push sequence. Without
 # the re-poll this would be inconclusive on every healthy finish and the rung would
 # never fire for real.
-: >"$FAKE_GH_CALLS"
+: >"$GH_CALLS"
 assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=unknown-then-mergeable \
   assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
   "UNKNOWN on the first poll then MERGEABLE -> finalized" \
@@ -226,7 +233,7 @@ assert_eq "2" "$(pr_views)" "the UNKNOWN answer triggered exactly one re-poll" \
   "The first UNKNOWN must be re-polled; the resolved answer must end the loop."
 
 # UNKNOWN forever -> inconclusive -> NOT conflicting, bounded at 1 poll + 2 re-polls.
-: >"$FAKE_GH_CALLS"
+: >"$GH_CALLS"
 assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=unknown \
   assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
   "UNKNOWN on every poll -> finalized (no false conflicting)" \
@@ -241,7 +248,7 @@ assert_contains "$mnote" "mergeability lookup inconclusive" \
 
 # The wall-clock ceiling really is a ceiling: with no time left, the loop stops after
 # the first poll rather than sleeping into it.
-: >"$FAKE_GH_CALLS"
+: >"$GH_CALLS"
 assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=unknown \
   MERGEABLE_POLL_CEILING=0 assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
   "a zero wall-clock ceiling still yields finalized, not conflicting" \
@@ -266,7 +273,7 @@ done
 # ORDER: the rung is reached only AFTER draft passes. A draft PR reports `draft` — and
 # makes NO mergeability call at all, so the cheap local/ladder answer never pays for a
 # network round-trip it doesn't need.
-: >"$FAKE_GH_CALLS"
+: >"$GH_CALLS"
 assert_eq "draft" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=draft FAKE_GH_MERGEABLE=conflicting \
   assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
   "a draft PR reports 'draft', not 'conflicting'" \
@@ -275,7 +282,7 @@ assert_eq "0" "$(pr_views)" "a draft PR makes no gh mergeability call" \
   "The mergeability lookup must not run until the draft rung has passed."
 
 # …and the checker ladder is untouched: a checker does not own PR mergeability.
-: >"$FAKE_GH_CALLS"
+: >"$GH_CALLS"
 printf '{"verdict":"pass"}\n' >"${CHECKER_LOG%.log}-verdict.json"
 assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MERGEABLE=conflicting \
   assert_finalized checker "$CHECKER_LOG" "$WT" 2>/dev/null)" \
@@ -284,7 +291,7 @@ assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MERGEABLE=conflicting \
 assert_eq "0" "$(pr_views)" "the checker ladder makes no gh mergeability call" \
   "Adding the rung to the checker path would spend a network call on a non-concern."
 rm -f "${CHECKER_LOG%.log}-verdict.json"
-unset FAKE_GH_CALLS
+unset GH_CALLS
 
 # --- assert_finalized: checker --------------------------------------------------
 VERDICT="${CHECKER_LOG%.log}-verdict.json"
@@ -367,7 +374,7 @@ cat >"$LED" <<LEDGER
 LEDGER
 CONF_CALLS="$(sandbox_tmp)/conflicting-gh-calls.txt"
 : >"$CONF_CALLS"
-FAKE_GH_CALLS="$CONF_CALLS" FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=conflicting \
+GH_CALLS="$CONF_CALLS" FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=conflicting \
   finalize_dispatch "$CONF_LOG" "$LED" 4245 "$WT" worker >/dev/null 2>&1 || true
 assert_contains "$(cat "$LED")" "status incomplete-conflicting" \
   "finalize_dispatch records incomplete-conflicting for a ready-but-unmergeable PR" \
@@ -379,3 +386,51 @@ assert_contains "$posted" "merge origin/main" \
 assert_contains "$posted" "CONFLICTING" \
   "the posted comment names the PR as ready-but-unmergeable" \
   "The comment must be actionable on its own — it is what the next worker reads."
+
+# --- the checker posts BOTH leads (issue #52) ------------------------------------
+# An interrupted checker used to post NOTHING countable, so CHECKER_LIMIT stayed frozen
+# at zero and the same PR was re-checked every cycle at a full CHECKER_BUDGET. Both
+# cases below post on the PR number taken from the LOG basename (`demo-pr-9`), not the
+# branch — a checker runs in the worker's `issue-N` worktree.
+CHK_LOG="$LOGS/demo-pr-9.log"
+CALLS="$LOGS/gh-calls.txt"
+
+printf '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"Claude AI usage limit reached"}\n' >"$CHK_LOG"
+: >"$CALLS"
+cat >"$LED" <<LEDGER
+- check pr#9 | owner/demo | issue-9 | $CHK_LOG | pid 4245 | dispatched 2026-01-01T00:00:00Z | status dispatched
+LEDGER
+GH_CALLS="$CALLS" FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready \
+  finalize_dispatch "$CHK_LOG" "$LED" 4245 "$WT" checker >/dev/null 2>&1 || true
+assert_contains "$(cat "$LED")" "status interrupted-ratelimit" \
+  "a rate-limited checker records interrupted-ratelimit" \
+  "classify_result must own the interrupted path for checkers too."
+assert_contains "$(cat "$CALLS")" "pr comment 9 -R owner/demo" \
+  "an interrupted checker comments on the PR from the log basename" \
+  "The comment must land on the PR (demo-pr-9.log -> #9), not the worktree's issue branch."
+assert_contains "$(cat "$CALLS")" "**Checker interrupted: interrupted-ratelimit**" \
+  "an interrupted checker posts the '**Checker interrupted:' lead (issue #52)" \
+  "Without this lead the round is uncountable and CHECKER_LIMIT never trips."
+assert_contains "$(cat "$CALLS")" "CHECKER_LIMIT" \
+  "the interrupted-checker comment names the cap it counts toward" \
+  "Keep the escalation path legible in the comment, as the worker leads do."
+
+# …and the incomplete lead still lands (the #40 behaviour this must not regress).
+printf '{"type":"result","subtype":"success","is_error":false,"result":"executing in the background"}\n' >"$CHK_LOG"
+rm -f "${CHK_LOG%.log}-verdict.json"
+: >"$CALLS"
+GH_CALLS="$CALLS" FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready \
+  finalize_dispatch "$CHK_LOG" "$LED" 4245 "$WT" checker >/dev/null 2>&1 || true
+assert_contains "$(cat "$CALLS")" "**Checker incomplete: incomplete-noverdict**" \
+  "a checker that wrote no verdict still posts the '**Checker incomplete:' lead" \
+  "Adding the interrupted lead must not displace the incomplete one (issue #40)."
+
+# A checker that finished cleanly posts NOTHING — the false-positive guard.
+printf '{"verdict":"pass"}\n' >"${CHK_LOG%.log}-verdict.json"
+: >"$CALLS"
+GH_CALLS="$CALLS" FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready \
+  finalize_dispatch "$CHK_LOG" "$LED" 4245 "$WT" checker >/dev/null 2>&1 || true
+n_posts="$(grep -c 'pr comment' "$CALLS" 2>/dev/null || true)"
+assert_eq "0" "$n_posts" \
+  "a checker that wrote its verdict posts no incomplete/interrupted comment" \
+  "Only a dispatch short of a clean finish may leave a countable round comment."

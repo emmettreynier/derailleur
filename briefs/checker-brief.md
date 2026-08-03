@@ -80,6 +80,11 @@ What to verify (substantive, not mechanical — CI already did mechanical)
    reason); (5) raw inputs untouched — the diff changes nothing under the repo's declared
    raw-data path. A standing-guard violation is a real finding even when every explicit
    criterion passes.
+6. Re-running a test suite: use the repo-local entry point from the PR's worktree, not an
+   installed CLI. When the repo under review IS derailleur, that means `./bin/test.sh
+   [--offline]` — `dr test` resolves through the `~/.local/bin` symlink to the *primary*
+   checkout, so a green tally from it is not evidence about this branch (it now refuses
+   from inside a worktree, and any pre-existing `dr test` result in a PR body is suspect).
 
 Soft review note (advisory — does NOT affect the verdict or findings): the results-summary
 has a "Suggested next steps / follow-ups" section. In your PR comment, briefly weigh in —
