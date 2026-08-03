@@ -17,8 +17,11 @@ work, and you engage in batched, per-project review windows instead.
 
 GitHub is the only source of truth (issues, PRs, labels, comments, board fields) — the
 ledger, logs, and digest are disposable derivatives regenerated from it, so a crash
-loses nothing. A human merge gate is non-negotiable: nothing in this system merges a
-PR, that's always you.
+loses nothing. A human merge gate is non-negotiable: no agent here merges a PR on its
+own initiative, and the *decision* to merge is always yours. The only path to a merge
+is your explicit instruction — you click merge, or you tell the human-gated
+interactive orchestrator to merge a PR you name, in-session. The autonomous loop never
+merges, under any condition.
 
 Why "derailleur"? Well, mostly just because I like bikes. Maybe there is some deep metaphor
 related to the shifting mechanism which allows a cyclist to ride at similar effort 
@@ -93,7 +96,12 @@ with a re-dispatch hint / an `incomplete-waiting` checker reporting a written ve
 *and* the live session, plus malformed/no-arg rejection); the `dispatch-common.sh`
 completion gate (`tmux_job_state`'s pane-dead liveness and `assert_finalized`'s
 per-role reason battery — including the "finished tmux session still counts as done"
-regression net and the no-false-`incomplete`-on-`gh`-failure guard);
+regression net and the no-false-`incomplete`-on-`gh`-failure guard), and both checker
+round comments it posts (`**Checker interrupted:` / `**Checker incomplete:`, and
+nothing at all on a clean finish); the checker-round cap (`CHECKER_ROUND_LEADS` covers
+every lead the poster emits, interrupted and incomplete rounds share one cap, only a
+to-operator verdict resets a generation, and `CHECKER_LIMIT` trailing interrupted
+rounds trip the escalation while one fewer does not);
 `tmux-run.sh` name/log derivation, `--tail` validation, `{{SLUG}}` wiring,
 and (when `tmux` is present) the atomic-create mutex; the `scheduled_repos` allow-list
 reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` on an
@@ -110,7 +118,9 @@ real `--dry-run`, the cycle orchestrator at the source level — together with t
 human-present `launch-orchestrator.sh` staying deliberately unrestricted; and
 the `bootstrap_worktree_data` critical raw-link gate across all four states
 (missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
-manifest → exempt). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
+manifest → exempt); and the runner's own worktree guard (two fake checkouts: cwd in the
+other one → refuses and names both trees; unrelated repo / same tree / symlinked same
+tree / non-git cwd → runs; the tree-under-test banner present either way). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
 and is byte-identical before/after.
 
 **What the online tier covers:** `board-digest.sh` emits a digest against the live
@@ -126,6 +136,21 @@ board; `launch-orchestrator.sh --dry-run` renders it end-to-end from your conf; 
 ```bash
 dr test                  # full suite (offline + online); online SKIPs if no gh/network
 dr test --offline        # offline tier only (what CI runs)
+```
+
+**From inside a derailleur worktree, run `./bin/test.sh` instead** — the one place `dr`
+is the wrong entry point. Like every `dr` command it resolves through the
+`~/.local/bin` symlink to the *install* checkout, which for every other command is
+correct (they need the machine-local `ledger.md`/`state/`/`projects/*.yml` that live
+there) but for `test` means it would run the primary checkout's `tests/`, not the branch
+you are standing in — and it used to do that silently, reporting a green tally for code
+that never ran. `bin/test.sh` now **refuses** when the cwd is a *different* derailleur
+checkout, naming both trees and the corrective `./bin/test.sh …` command; from anywhere
+else (another project, `$HOME`, `/tmp`) `dr test` works exactly as before. Every run —
+refused or not — opens with the tree under test and the file count it discovered:
+
+```
+testing /path/to/derailleur (12 files in tests/offline)
 ```
 
 Each test file is self-contained and can be run directly for debugging, e.g.
@@ -232,7 +257,9 @@ loads board state and proposes what to dispatch, acting only on your explicit OK
 
 Rendered into `~/.claude/commands/` by `install.sh` (the one `~/.claude/` carve-out).
 It **proposes, then dispatches workers and checkers only after you confirm** — never
-autonomously, and it never merges. Its tools are scoped to the board digest, the two
+autonomously, and it never merges on its own initiative: a `checked-pass` PR is
+surfaced, not acted on, unless you instruct the merge in-session naming that PR (one
+instruction, exactly that PR). Its tools are scoped to the board digest, the two
 launchers, read-only `gh`, and the `Monitor` + `watch-dispatch` tools (so it can watch
 the workers/checkers it dispatched to completion without blocking your session). For a
 session booted from
@@ -255,7 +282,7 @@ Tunable by env var, e.g. `WORKER_BUDGET=6 dr orchestrator-cycle`:
 | `MODEL` | `sonnet` | Orchestrator session model. It only reads the digest and routes, so it's pinned cheap — and pinned at all, so a cycle never inherits whatever expensive model your interactive sessions default to. Resolution: `MODEL` env → `ORCHESTRATOR_MODEL` in `orchestrator.conf` → `sonnet`, so set a persistent per-operator default in the conf and still override per-run with the env var. |
 | `WORKER_BUDGET` | `10.00` | Per-worker session budget (USD). |
 | `CHECKER_BUDGET` | `3.00` | Per-checker session budget (USD). |
-| `CHECKER_LIMIT` | `4` | Max checker rounds per review generation before escalating to `needs-input`. |
+| `CHECKER_LIMIT` | `4` | Max checker rounds per review generation before escalating to `needs-input` — a round is a verdict, an `incomplete` finish, or an `interrupted` one (all three leave a comment the cap counts). Only a to-operator verdict (`pass` / `pass_with_findings` / `blocked`) ends a generation and resets it. |
 | `WORKER_LIMIT` | `4` | Max consecutive worker attempts with no clean finish before escalating to `needs-input` — counts every `interrupted-*` (cut off) and every `incomplete-*` reason *except* `waiting`. |
 | `WORKER_WAIT_LIMIT` | `10` | The same backstop for the `incomplete-waiting` class alone (a worker that exited cleanly while its detached `dr tmux-run` job keeps going). Looser because the retry just reattaches, sees the job running, and exits for cents — where an `interrupted-*` retry already burned a full `WORKER_BUDGET`. Still capped: a job that is alive but never finishes must not re-dispatch forever. |
 
