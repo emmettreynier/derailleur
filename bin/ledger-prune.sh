@@ -111,8 +111,11 @@ def issue_comments(repo, num):
 #                never finishing would re-dispatch forever with no backstop).
 #   hard class   every `**Worker interrupted:` (cut off — a full WORKER_BUDGET already
 #                burned) and every OTHER incomplete reason (`uncommitted`, `unpushed`,
-#                `nopr`, `draft` — the session exited having malfunctioned, not having
-#                handed off). Tight cap (WORKER_LIMIT).
+#                `nopr`, `draft`, `conflicting` — the session exited having
+#                malfunctioned or left an unmergeable PR, not having handed off).
+#                Tight cap (WORKER_LIMIT). Membership is by DEFAULT, not by an
+#                enumeration: anything that isn't the wait lead lands here, so a new
+#                reason token is hard-class unless deliberately exempted (issue #51).
 #
 # Classification reads the reason token out of the comment lead and nothing else — no
 # tmux probe, no filesystem timestamps. This script runs at cycle start and stays a pure
@@ -142,13 +145,21 @@ def trailing_no_finish_counts(repo, num):
             hard += 1
     return hard, wait
 
-def escalate_needs_input(repo, num, n, limit, knob, what):
+def escalate_needs_input(repo, num, n, limit, knob, what, also=""):
+    """Post the ONE escalation comment for this prune. `also` is the *other* class's
+    trailing count, reported as context — the operator reads this comment instead of
+    the ledger, so a run that tripped one class while accumulating rounds of the other
+    must say so here or that half of the record silently disappears (#40 PR #46
+    round-5 review, folded into issue #51). It is appended to the same comment, never
+    posted as a second one, and it never displaces the trigger's own naming."""
     try:
         subprocess.run(["gh", "issue", "edit", str(num), "-R", repo,
                          "--add-label", "needs-input"], capture_output=True, timeout=15)
         subprocess.run(["gh", "issue", "comment", str(num), "-R", repo, "--body",
             f"🔁 Worker limit reached: {n} {what} in a row, never reaching `ready` "
-            f"(limit {limit}, `{knob}`). Escalating to "
+            f"(limit {limit}, `{knob}`). "
+            + (f"{also} " if also else "")
+            + f"Escalating to "
             f"@{os.environ.get('GITHUB_HANDLE','')} — the "
             f"issue may be too large for one worker budget, or something is "
             f"silently blocking progress."], capture_output=True, timeout=15)
@@ -176,14 +187,24 @@ def handle_no_clean_finish(repo, num):
         return None
     hard, wait = counts
     # Each class is tallied independently and escalates on ITS OWN limit; a mixed
-    # trailing run therefore doesn't escalate until one class gets there alone.
+    # trailing run therefore doesn't escalate until one class gets there alone. The
+    # class that DIDN'T trip still gets one line of context in the same comment (see
+    # escalate_needs_input) so the operator sees the whole trailing run, not half of it.
     if hard >= WORKER_LIMIT:
+        also = (f"Also in the same trailing run: {wait} exit-to-wait attempt(s) "
+                f"(`incomplete-waiting`, counted separately against `WORKER_WAIT_LIMIT` "
+                f"at {wait}/{WORKER_WAIT_LIMIT}) — context, not the trigger."
+                if wait else "")
         escalate_needs_input(repo, num, hard, WORKER_LIMIT, "WORKER_LIMIT",
-                             "interrupted/unfinalized attempts")
+                             "interrupted/unfinalized attempts", also)
         return f"WORKER_LIMIT reached ({hard}/{WORKER_LIMIT}) — escalated to needs-input"
     if wait >= WORKER_WAIT_LIMIT:
+        also = (f"Also in the same trailing run: {hard} interrupted/unfinalized "
+                f"attempt(s) (counted separately against `WORKER_LIMIT` at "
+                f"{hard}/{WORKER_LIMIT}) — context, not the trigger."
+                if hard else "")
         escalate_needs_input(repo, num, wait, WORKER_WAIT_LIMIT, "WORKER_WAIT_LIMIT",
-                             "exit-to-wait attempts (`incomplete-waiting`)")
+                             "exit-to-wait attempts (`incomplete-waiting`)", also)
         return (f"WORKER_WAIT_LIMIT reached ({wait}/{WORKER_WAIT_LIMIT})"
                 " — escalated to needs-input")
     # Cosmetic only (digest doesn't need it) — keeps the plain GitHub label view

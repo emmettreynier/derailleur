@@ -93,6 +93,7 @@ write_comments() {
 }
 WAIT_C='**Worker incomplete: incomplete-waiting**. exited to wait.'
 NOPR_C='**Worker incomplete: incomplete-nopr**. exited without a PR.'
+CONF_C='**Worker incomplete: incomplete-conflicting**. ready PR is CONFLICTING.'
 CUT_C='**Worker interrupted: interrupted-budget**. cut off.'
 write_repeated() {   # $1 = body, $2 = count -> that body repeated $2 times
   local i=0
@@ -182,3 +183,38 @@ out8="$(PATH="$SHIM2:$PATH" LEDGER="$LED2" WORKER_WAIT_LIMIT=2 "$LP" 2>&1)"
 assert_contains "$out8" "WORKER_WAIT_LIMIT reached (2/2)" \
   "WORKER_WAIT_LIMIT is env-overridable" \
   "The loose limit must read WORKER_WAIT_LIMIT from the environment (README documents it)."
+
+# (g) `incomplete-conflicting` (issue #51) is HARD class, not wait class: a ready PR
+# GitHub cannot merge is a real blocker needing action, not a cheap babysit handoff, so
+# it rides the tight WORKER_LIMIT. Class membership is by default (anything that isn't
+# the wait lead), which is exactly what this pins down for any future reason token.
+write_repeated "$CONF_C" 4
+write_incomplete_ledger "$LED2"
+out9="$(run_prune "$LED2")"
+assert_contains "$out9" "WORKER_LIMIT reached (4/4)" \
+  "four trailing incomplete-conflicting attempts hit WORKER_LIMIT" \
+  "A conflicting PR must count in the hard class, never against WORKER_WAIT_LIMIT (#51)."
+assert_not_contains "$out9" "WORKER_WAIT_LIMIT reached" \
+  "incomplete-conflicting does not ride the loose limit" \
+  "Only incomplete-waiting is the wait class; every other reason is hard class."
+
+# (h) when a trailing run trips one class while the OTHER also has a non-zero count,
+# ONE comment reports both — the class that tripped as the trigger, the other as
+# context. Before this, only the tripped class was named and the operator's record of
+# the run was silently half-missing (PR #46 round-5 review, folded into #51).
+write_comments "$WAIT_C" "$WAIT_C" "$NOPR_C" "$CONF_C" "$CUT_C" "$NOPR_C"
+write_incomplete_ledger "$LED2"
+out10="$(run_prune "$LED2")"
+assert_contains "$out10" "WORKER_LIMIT reached (4/4)" \
+  "the hard class trips while a non-zero wait count is also present" \
+  "The two tallies are independent; 4 hard rounds must still escalate."
+esc="$(grep '^issue comment' "$GH_CALLS" 2>/dev/null || true)"
+assert_contains "$esc" "\`WORKER_LIMIT\`" \
+  "the escalation comment names the hard class as the trigger" \
+  "Which class TRIGGERED must stay unambiguous — the second class is context only."
+assert_contains "$esc" "2 exit-to-wait attempt(s)" \
+  "the escalation comment also reports the wait-class count as context" \
+  "A run that tripped one class while accumulating the other must report both (#51 amendment)."
+nesc="$(grep -c '^issue comment' "$GH_CALLS" 2>/dev/null || true)"
+assert_eq "1" "${nesc:-0}" "exactly one escalation comment is posted per prune" \
+  "The second class is an extra LINE in the existing comment, never a second comment."

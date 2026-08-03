@@ -12,8 +12,9 @@
 #     finalize_dispatch in dispatch-common.sh:
 #       done                  finished AND finalized (deliverables present)
 #       incomplete-<reason>   exited cleanly WITHOUT finalizing (waiting / uncommitted /
-#                             unpushed / nopr / draft / noverdict) — terminal for this
-#                             dispatch, but the work isn't finished: RE-DISPATCH REQUIRED
+#                             unpushed / nopr / draft / conflicting / noverdict) —
+#                             terminal for this dispatch, but the work isn't finished:
+#                             RE-DISPATCH REQUIRED
 #       interrupted-<reason>  cut off (ratelimit / budget / error)
 #       unknown               no parseable result JSON
 #   - a checker additionally writes logs/<slug>-pr-<n>-verdict.json on completion
