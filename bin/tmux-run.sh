@@ -136,19 +136,30 @@ WRAPPED="${CMD_STR}2>&1 | tee $(printf '%q' "$LOG")"
 # exits in milliseconds takes its window — and the whole session — down with it: the run
 # then reads as `absent`, making "finished" indistinguishable from "never ran" and the
 # `#{pane_dead}` liveness test undecidable (design.md → Liveness caveat).
+#
+# WHY TWO COMPLETE LISTS OR'd, rather than one list with a `\; set-option` fallback
+# appended: tmux PARSES a whole command list before executing any of it, so a
+# `set-option` flag the installed tmux doesn't know (`-w` predates tmux 2.6 but isn't
+# universal) rejects the list wholesale and `new-session` NEVER RUNS. A fallback inside
+# the same list is therefore unreachable, and the create would be lost entirely — the
+# dispatch would die at the "(tmux error)" below. So the fallback re-issues the *create*
+# too, with the version-agnostic session-scoped form (which arms the window option all
+# the same). The mutex is unchanged: in a genuine collision BOTH attempts fail on the
+# name and create nothing, so control still falls through to the existing-session branch.
 if tmux new-session -d -s "$NAME" "$WRAPPED" \; \
-     set-option -w -t "$NAME" remain-on-exit on 2>/dev/null; then
+     set-option -w -t "$NAME" remain-on-exit on 2>/dev/null \
+   || tmux new-session -d -s "$NAME" "$WRAPPED" \; \
+        set-option -t "$NAME" remain-on-exit on 2>/dev/null; then
   printf 'tmux-run: status=created name=%s log=%s\n' "$NAME" "$LOG"
   exit 0
 fi
 
 if tmux has-session -t "$NAME" 2>/dev/null; then
-  # Session-scoped fallback for a tmux too old to accept the window-scoped `-w` form
-  # (which would have aborted the command list above, after the create succeeded).
-  # Arming an already-armed session is a no-op, so this is safe to run unconditionally
-  # on any existing session, and — as before — failing to arm never fails the dispatch.
-  # Ownership is the unchanged mutex call: create failed + session exists means someone
-  # else owns it, and we report theirs rather than spawning a duplicate.
+  # Best-effort arming of a session we did not create. Both create attempts above failed
+  # while the session exists, so the mutex reading applies unchanged: someone else owns
+  # it, and we report theirs rather than spawning a duplicate. Arming an already-armed
+  # session is a no-op; the session-scoped form is used because it's the one every tmux
+  # accepts, and — as before — failing to arm never fails the dispatch.
   tmux set-option -t "$NAME" remain-on-exit on 2>/dev/null || true
   # Classify: any dead pane (command finished, session kept by remain-on-exit) => dead.
   dead="$(tmux list-panes -t "$NAME" -F '#{pane_dead}' 2>/dev/null | head -1)"

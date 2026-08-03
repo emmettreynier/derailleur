@@ -111,4 +111,49 @@ else
 otherwise a sub-second command destroys its window before the option lands."
   assert_eq "dead" "$f_state" "tmux_job_state classifies the finished fast run as 'dead', not 'absent'" \
     "The inspectable-dead-session invariant (design.md -> Liveness caveat) is broken."
+
+  # `-w`-unsupported branch (issue #54 review): tmux parses a whole command list BEFORE
+  # executing any of it, so a set-option flag the installed tmux doesn't know rejects the
+  # list wholesale and new-session never runs. The fallback must therefore re-issue the
+  # CREATE with the session-scoped form — a bare `set-option` retry can never reach a
+  # session that was never created, and the dispatch would die instead of degrading.
+  # Simulated with a PATH shim that rejects exactly `set-option … -w …` the way a pre-2.6
+  # tmux would, and passes every other invocation through to the real binary.
+  TMUX_REAL="$(command -v tmux)"
+  mkdir -p "$SB/shim"
+  cat > "$SB/shim/tmux" <<SHIM
+#!/usr/bin/env bash
+# Pretend to be a tmux whose set-option has no -w flag: reject the whole list, run nothing.
+saw_setopt=0; saw_w=0
+for a in "\$@"; do
+  [ "\$a" = "set-option" ] && saw_setopt=1
+  [ "\$a" = "-w" ]         && saw_w=1
+done
+if [ "\$saw_setopt" = 1 ] && [ "\$saw_w" = 1 ]; then
+  echo "command set-option: unknown flag -w" >&2
+  exit 1
+fi
+exec "$TMUX_REAL" "\$@"
+SHIM
+  chmod +x "$SB/shim/tmux"
+
+  TR_OLD="derail-owner-demo-repo-9"
+  tmux kill-session -t "$TR_OLD" 2>/dev/null || true
+  rc=0
+  o_out="$(PATH="$SB/shim:$PATH" "$TMUXRUN" zz-smoke 9 -- sh -c 'echo started; sleep 60' 2>&1)" || rc=$?
+  o_exists=0; tmux has-session -t "$TR_OLD" 2>/dev/null && o_exists=1
+  o_opt="$(tmux show-options -t "$TR_OLD" remain-on-exit 2>/dev/null || true)"
+  tmux kill-session -t "$TR_OLD" 2>/dev/null || true   # teardown before asserting
+
+  assert_rc 0 "$rc" "a tmux without 'set-option -w' still dispatches (no hard die)" \
+    "Failing to arm remain-on-exit must never fail the dispatch. tmux rejects an unknown \
+flag at PARSE time, so the fallback must re-issue new-session too, not just set-option."
+  assert_contains "$o_out" "status=created" "the -w fallback still reports status=created" \
+    "The session-scoped fallback list must create the session, not fall through to the \
+existing-session/reconcile path."
+  assert_eq 1 "$o_exists" "the -w fallback actually creates the session" \
+    "With -w rejected at parse time the first list creates nothing; the OR'd second \
+complete list (new-session ... \\; set-option -t ...) is what creates it."
+  assert_contains "$o_opt" "remain-on-exit on" "the -w fallback still arms remain-on-exit" \
+    "The session-scoped set-option form must leave remain-on-exit on."
 fi
