@@ -105,6 +105,10 @@ and both checker round comments it posts (`**Checker interrupted:` /
 (`CHECKER_ROUND_LEADS` covers every lead the poster emits, interrupted and incomplete
 rounds share one cap, only a to-operator verdict resets a generation, and
 `CHECKER_LIMIT` trailing interrupted rounds trip the escalation while one fewer does not);
+the checker verdict-file rotation (an existing `logs/<slug>-pr-<n>-verdict.json` is moved to
+a single `.prev.json` slot, a second rotation overwrites that one slot rather than
+accumulating, a missing file is a clean no-op under `set -e`, `--dry-run` leaves both paths
+byte-identical, and `watch-dispatch.sh` never reads the rotated slot);
 `tmux-run.sh` name/log derivation, `--tail` validation, `{{SLUG}}` wiring,
 and (when `tmux` is present) the atomic-create mutex; the `scheduled_repos` allow-list
 reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` on an

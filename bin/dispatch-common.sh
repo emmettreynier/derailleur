@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# dispatch-common.sh — shared post-run helpers for launch-worker.sh / launch-checker.sh.
+# dispatch-common.sh — shared helpers for launch-worker.sh / launch-checker.sh (mostly
+# post-run; `rotate_verdict_file` is the one pre-dispatch member, parked here so the
+# offline tests can source it without booting `claude`).
 # SOURCED, not executed. Its job: make a dispatch that did not finish record itself
 # honestly, instead of looking like a clean finish. Two distinct failure shapes:
 #
@@ -479,6 +481,43 @@ finalize_dispatch() {
         >>"$log" 2>&1 || echo "  ⚠ could not post $lead comment on $repo#$pr" >&2
     fi
   fi
+}
+
+# rotate_verdict_file <verdict-file> — move an existing checker verdict JSON aside to a
+# single `.prev.json` slot. Called by launch-checker.sh BEFORE it starts the session, so
+# the canonical path is absent when a new generation begins. A pre-run helper (unlike its
+# neighbours here) — it lives in this file because it must be reachable by the offline
+# test tier without booting `claude`.
+#
+# WHY IT EXISTS (issue #49). The verdict path is fixed per (slug, PR) with no round or
+# timestamp component, and nothing ever removed it, so on a RE-dispatch the previous
+# round's verdict already sat at the canonical path from tick one. watch-dispatch.sh's
+# terminal_state stats that file before consulting the ledger status, so a round-2 checker
+# was reported terminal within seconds off a stale verdict on a possibly-many-commits-old
+# head — and, worse, a round-2 checker that died before writing anything was reported as a
+# clean verdict, so the crash was never surfaced at all. Clearing the path at dispatch is
+# what restores the briefs' promise that "a crashed or interrupted dispatch is never
+# watched in silence" for rounds 2+.
+#
+# WHY A ROTATION AND NOT AN `rm`. A re-dispatched checker already overwrites its
+# predecessor in place, so no verdict history survives across rounds today; moving instead
+# of deleting costs nothing and leaves one MORE local generation than exists now — exactly
+# the one that matters when a fresh checker crashes before its first write. A single slot,
+# not a timestamped archive: nothing prunes logs/, and the checker's PR comment carries the
+# full verdict JSON, so GitHub is the durable history. Do not "simplify" this back to a
+# delete, and do not let it grow a timestamped archive.
+#
+# watch-dispatch.sh reads ONLY the canonical path — `.prev.json` is deliberately invisible
+# to it, so its verdict-file-wins precedence is untouched by this.
+#
+# `if` block, not `[ -f x ] && mv …`: a bare short-circuit as the last statement returns
+# nonzero when the test is false and would abort a `set -e` caller silently (issue #23).
+rotate_verdict_file() {
+  local vf="$1"
+  if [ -f "$vf" ]; then
+    mv -f "$vf" "${vf%.json}.prev.json"
+  fi
+  return 0
 }
 
 # report_mutation <worktree> <baseline> — compare the worktree's current tracked-file

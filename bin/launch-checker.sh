@@ -218,6 +218,18 @@ write_ledger() {  # $1 = pid, $2 = status
 # report_mutation (compares against MUTATION_BASELINE) lives in dispatch-common.sh so
 # the detached new-session body can call it too; here we pass the baseline explicitly.
 
+# Clear the canonical verdict path for this new generation (issue #49). On a RE-dispatch
+# the previous round's verdict is still sitting there, and watch-dispatch.sh's
+# terminal_state stats it before the ledger status — so the new checker was reported
+# terminal within seconds off a stale verdict, and a checker that crashed before its first
+# write was reported as a clean pass instead of surfacing the crash. Rotated to one
+# `.prev.json` slot rather than `rm`'d: a re-dispatch already overwrites in place today, so
+# moving keeps one MORE local generation (the one that matters when a fresh checker dies
+# before writing) at no risk of unbounded growth — the PR comment is the durable full copy.
+# Deliberately AFTER the --dry-run exit above: a plan-only run must mutate nothing.
+# See rotate_verdict_file in dispatch-common.sh for the full rationale.
+rotate_verdict_file "$VERDICT_FILE"
+
 echo "Dispatching checker for $REPO PR #$PR (closes #$ISSUE) → $WORKTREE (log: $LOG)"
 if [ "$FG" = 1 ]; then
   write_ledger "-" "dispatched"
