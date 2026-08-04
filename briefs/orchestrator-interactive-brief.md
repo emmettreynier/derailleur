@@ -221,7 +221,9 @@ PR draft and nothing finalized.
 
 1. **Ledger `status`.** `finalize_dispatch` records `incomplete-<reason>` (not `done`)
    whenever a clean exit didn't finalize: `waiting` (its tmux job is still alive),
-   `uncommitted`, `unpushed`, `nopr`, `draft`, or `noverdict` for a checker. `done`
+   `uncommitted`, `unpushed`, `nopr`, `draft`, `conflicting` (the PR is ready but
+   GitHub cannot merge it — the branch needs `origin/main` merged in and the conflict
+   resolved, not another round of verification), or `noverdict` for a checker. `done`
    now means *actually finalized* — deliverables committed and pushed, PR ready (or,
    for a checker, a verdict written). `watch-dispatch.sh` reports an `incomplete-*`
    item as terminal with `(re-dispatch required)`.

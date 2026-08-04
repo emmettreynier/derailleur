@@ -166,6 +166,57 @@ _worktree_repo() {
   return 0
 }
 
+# _pr_mergeable <repo> <pr#> -> echoes exactly one of: CONFLICTING | MERGEABLE | INCONCLUSIVE
+#
+# WHY THE RETRY (issue #51): GitHub computes `mergeable` **asynchronously**. For a few
+# seconds after a push — which is exactly when a worker exits — `gh pr view --json
+# mergeable` returns `UNKNOWN` while GitHub recomputes the test merge. `UNKNOWN` is
+# therefore the EXPECTED first answer, not an error: a no-retry check would almost
+# never see a real verdict and the rung would be dead code.
+#
+# WHY IT IS PERMISSIVE: only an explicit `CONFLICTING` is a fact. `MERGEABLE`, a stuck
+# `UNKNOWN`, an unrecognized value, a non-zero `gh` exit and unparseable output all
+# collapse to INCONCLUSIVE, which the caller treats as "not conflicting" — the same
+# no-false-`incomplete`-from-a-flaky-network rule the nopr/draft checks follow. Do NOT
+# "simplify" this into a strict check.
+#
+# BOUNDED: one poll plus up to MERGEABLE_REPOLLS re-polls MERGEABLE_POLL_SLEEP apart,
+# under a hard MERGEABLE_POLL_CEILING wall-clock ceiling (checked BEFORE each sleep, so
+# the ceiling bounds the sleeps too) — a worker's exit path must never hang on GitHub.
+# The three knobs are env-overridable so the offline tests exercise this same code with
+# the sleeps zeroed; the defaults are the contract (2 re-polls, ~3s apart, ≤10s added).
+_pr_mergeable() {
+  local repo="${1:-}" pr="${2:-}"
+  local repolls="${MERGEABLE_REPOLLS:-2}"
+  local nap="${MERGEABLE_POLL_SLEEP:-3}"
+  local ceiling="${MERGEABLE_POLL_CEILING:-10}"
+  local start="$SECONDS" polls=0 rc out m
+  while : ; do
+    rc=0
+    out="$(gh pr view "$pr" -R "$repo" --json mergeable 2>/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "INCONCLUSIVE"; return 0
+    fi
+    m="$(printf '%s' "$out" | jq -r '.mergeable // empty' 2>/dev/null || true)"
+    case "$m" in
+      CONFLICTING) echo "CONFLICTING"; return 0 ;;
+      MERGEABLE)   echo "MERGEABLE";   return 0 ;;
+      UNKNOWN)     : ;;                              # still computing — re-poll
+      *)           echo "INCONCLUSIVE"; return 0 ;;  # empty/unparseable/unrecognized
+    esac
+    polls=$((polls + 1))
+    if [ "$polls" -gt "$repolls" ]; then
+      break
+    fi
+    if [ $((SECONDS - start + nap)) -ge "$ceiling" ]; then
+      break
+    fi
+    sleep "$nap"
+  done
+  echo "INCONCLUSIVE"
+  return 0
+}
+
 # assert_finalized <kind> <log> <worktree> -> prints "" when the dispatch actually
 # finalized something, else ONE reason token naming the first failed check.
 #
@@ -182,12 +233,18 @@ _worktree_repo() {
 # classification is already more informative and keeps its status.
 #
 # Order matters (first failure wins):
-#   worker : waiting -> uncommitted -> unpushed -> nopr -> draft
+#   worker : waiting -> uncommitted -> unpushed -> nopr -> draft -> conflicting
 #   checker: waiting -> noverdict
 #
+# `conflicting` is deliberately LAST: it is the only rung that costs an extra network
+# round-trip (and possibly a bounded retry), so every cheap local signal gets to win
+# first — a draft PR reports `draft` and never triggers a mergeability lookup at all.
+# The checker ladder does NOT gain it: a checker does not own PR mergeability.
+#
 # NO FALSE INCOMPLETE FROM A FLAKY NETWORK: a failed/unparseable `gh` lookup SKIPS the
-# nopr/draft checks with a stderr note rather than asserting a reason. Only local,
-# deterministic signals (git, the filesystem, tmux) may assert one.
+# nopr/draft/conflicting checks with a stderr note rather than asserting a reason. Only
+# local, deterministic signals (git, the filesystem, tmux) — plus an *explicit*
+# `mergeable == "CONFLICTING"` from GitHub — may assert one.
 assert_finalized() {
   local kind="$1" log="$2" worktree="$3"
   local num repo tmux_name
@@ -244,7 +301,7 @@ assert_finalized() {
     return 0
   fi
   local pr_json pr_rc=0 npr
-  pr_json="$(gh pr list -R "$repo" --head "issue-$num" --state open --json isDraft 2>/dev/null)" \
+  pr_json="$(gh pr list -R "$repo" --head "issue-$num" --state open --json isDraft,number 2>/dev/null)" \
     || pr_rc=$?
   if [ "$pr_rc" -ne 0 ]; then
     echo "  note: gh PR lookup failed for $repo (head issue-$num) — skipping nopr/draft checks" >&2
@@ -262,6 +319,27 @@ assert_finalized() {
   fi
   if [ "$(printf '%s' "$pr_json" | jq -r '.[0].isDraft' 2>/dev/null || true)" = "true" ]; then
     echo "draft"; return 0
+  fi
+
+  # (6w) conflicting — the PR is READY but GitHub cannot merge it (issue #51). Without
+  # this rung a ready-but-unmergeable PR passes the whole battery and the worker's own
+  # exit reports `done` on a deliverable that cannot land; the digest then reads it as a
+  # ready PR awaiting a checker, and a whole CHECKER_BUDGET round is spent discovering
+  # the conflict. Reached only here, after `draft` has passed — see _pr_mergeable for
+  # why the lookup retries and why it asserts ONLY on an explicit CONFLICTING.
+  local prnum mergeable
+  prnum="$(printf '%s' "$pr_json" | jq -r '.[0].number // empty' 2>/dev/null || true)"
+  case "$prnum" in
+    ''|*[!0-9]*)
+      echo "  note: gh PR lookup carried no usable PR number for $repo — skipping conflicting check" >&2
+      return 0 ;;
+  esac
+  mergeable="$(_pr_mergeable "$repo" "$prnum")"
+  if [ "$mergeable" = "CONFLICTING" ]; then
+    echo "conflicting"; return 0
+  fi
+  if [ "$mergeable" = "INCONCLUSIVE" ]; then
+    echo "  note: gh mergeability lookup inconclusive for $repo#$prnum — treating as not conflicting" >&2
   fi
   return 0
 }
@@ -373,7 +451,12 @@ finalize_dispatch() {
     issue="$(git -C "$worktree" branch --show-current 2>/dev/null | sed -nE 's/^issue-([0-9]+)$/\1/p')"
     if [ -n "$repo" ] && [ -n "$issue" ]; then
       local body
-      if [ "$lead" = "incomplete" ]; then
+      if [ "$st" = "incomplete-conflicting" ]; then
+        # Named explicitly, not left to the generic incomplete text: a bare status
+        # invites the next worker to re-verify and re-mark the PR ready instead of
+        # resolving anything (observed on #40 round 3, issue #51).
+        body="**Worker incomplete: $st**${push_note}. The PR is marked **ready but GitHub reports it as \`CONFLICTING\`** — it cannot be merged, so the deliverable is unusable as it stands. This is NOT something to re-verify: the conflict has to be resolved. On re-dispatch, in the \`issue-$issue\` worktree, run \`git fetch origin && git merge origin/main\`, resolve the conflicted files, commit, and push — then leave the PR ready. Counts against \`WORKER_LIMIT\` (a conflict is a real blocker, not an exit-to-wait handoff), so repeated rounds escalate to \`needs-input\`."
+      elif [ "$lead" = "incomplete" ]; then
         body="**Worker incomplete: $st**${push_note}. The session exited cleanly but did NOT finalize (first unmet check: \`${st#incomplete-}\`) — most often an exit-to-wait on a detached \`dr tmux-run\` job. Re-dispatch to reattach-and-babysit per the worker brief; repeated attempts on this issue with no clean finish will escalate to \`needs-input\`."
       else
         body="**Worker interrupted: $st**${push_note}. Not a failure by itself — the orchestrator recovers this automatically next cycle; repeated attempts on this issue with no clean finish will eventually escalate to \`needs-input\`."

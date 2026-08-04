@@ -46,7 +46,7 @@ A PR existing does NOT bar dispatch — what matters is the PR's STATE:
 
 `incomplete-*` and `⏳ tmux-live` mean RE-DISPATCH, never "finalized":
 - A digest line reading `ledger status=incomplete-<reason>` (waiting / uncommitted /
-  unpushed / nopr / draft / noverdict) is a dispatch that exited WITHOUT finishing —
+  unpushed / nopr / draft / conflicting / noverdict) is a dispatch that exited WITHOUT finishing —
   most often a worker that handed a long job to `dr tmux-run` and, correctly per its
   brief, exited to let the next dispatch reattach. The session is gone, so it holds no
   capacity, but the work is not done. Treat it exactly like any other draft-PR resume

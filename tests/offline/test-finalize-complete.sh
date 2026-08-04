@@ -22,8 +22,14 @@ assert_file_present "$REPO_ROOT/bin/dispatch-common.sh" "bin/dispatch-common.sh 
 # --- shims --------------------------------------------------------------------
 # One shim dir on PATH provides both `tmux` and `gh`. Each reads its behaviour from an
 # env var so a single shim covers every case (no rewriting files mid-test):
-#   FAKE_TMUX_STATE  absent | alive | dead   (what the fake session reports)
-#   FAKE_GH_MODE     nopr | draft | ready | fail | garbage
+#   FAKE_TMUX_STATE   absent | alive | dead   (what the fake session reports)
+#   FAKE_GH_MODE      nopr | draft | ready | fail | garbage   (`gh pr list`)
+#   FAKE_GH_MERGEABLE conflicting | mergeable | unknown | unknown-then-mergeable
+#                     | weird | fail | garbage                (`gh pr view --json mergeable`)
+#   GH_CALLS          path of a file the shim appends every invocation's args to, so a
+#                     test can assert what was posted, and that a lookup did (or did
+#                     NOT) happen. ONE variable for both — issues #51 and #52 each grew
+#                     a shim against this file and they must not fork again.
 SHIMS="$(sandbox_tmp)"
 
 cat >"$SHIMS/tmux" <<'SH'
@@ -42,22 +48,50 @@ chmod +x "$SHIMS/tmux"
 
 cat >"$SHIMS/gh" <<'SH'
 #!/usr/bin/env bash
-# Every invocation is appended to $GH_CALLS (when set) so a test can assert what
-# finalize_dispatch posted; `gh pr list … --json isDraft` is the only query answered.
-if [ -n "${GH_CALLS:-}" ]; then printf '%s\n' "$*" >>"$GH_CALLS"; fi
+# Two lookups are exercised: `gh pr list … --json isDraft,number` (FAKE_GH_MODE) and
+# `gh pr view N --json mergeable` (FAKE_GH_MERGEABLE); the comment posts are no-ops.
+# Every invocation is appended to $GH_CALLS (when set) first, so a test can assert both
+# what finalize_dispatch posted and how many mergeability polls it made.
+prior=0
+if [ -n "${GH_CALLS:-}" ]; then
+  prior="$(grep -c '^pr view' "$GH_CALLS" 2>/dev/null || true)"
+  prior="${prior:-0}"
+  printf '%s\n' "$*" >>"$GH_CALLS"
+fi
 case "$1 ${2:-}" in
   "pr comment"|"issue comment") exit 0 ;;
 esac
+if [ "${1:-}" = "pr" ] && [ "${2:-}" = "view" ]; then
+  case "${FAKE_GH_MERGEABLE:-mergeable}" in
+    conflicting) echo '{"mergeable":"CONFLICTING"}' ;;
+    mergeable)   echo '{"mergeable":"MERGEABLE"}' ;;
+    unknown)     echo '{"mergeable":"UNKNOWN"}' ;;
+    # The realistic post-push shape: GitHub is still recomputing on the first poll.
+    unknown-then-mergeable)
+      if [ "$prior" -eq 0 ]; then echo '{"mergeable":"UNKNOWN"}'
+      else                        echo '{"mergeable":"MERGEABLE"}'; fi ;;
+    weird)       echo '{"mergeable":"SOMETHING_NEW"}' ;;
+    fail)        echo "gh: could not resolve host" >&2; exit 1 ;;
+    garbage)     echo 'not json at all' ;;
+  esac
+  exit 0
+fi
 case "${FAKE_GH_MODE:-nopr}" in
   nopr)    echo '[]' ;;
-  draft)   echo '[{"isDraft":true}]' ;;
-  ready)   echo '[{"isDraft":false}]' ;;
+  draft)   echo '[{"isDraft":true,"number":99}]' ;;
+  ready)   echo '[{"isDraft":false,"number":99}]' ;;
   fail)    echo "gh: could not resolve host" >&2; exit 1 ;;
   garbage) echo 'not json at all' ;;
 esac
+exit 0
 SH
 chmod +x "$SHIMS/gh"
 export PATH="$SHIMS:$PATH"
+
+# Zero the re-poll sleep everywhere below: the retry LOGIC is what's under test, and a
+# real 3s nap would make the suite sleep ~12s. Cases that care about the wall-clock
+# ceiling set MERGEABLE_POLL_CEILING explicitly.
+export MERGEABLE_POLL_SLEEP=0
 
 # --- a throwaway git repo standing in for a worker worktree --------------------
 # `origin` is a plain github.com URL so _worktree_repo derives owner/repo from it, and
@@ -161,6 +195,104 @@ gh_note="$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=fail assert_finalized worker "$WO
 assert_contains "$gh_note" "skipping nopr/draft checks" "the skipped PR lookup is noted on stderr" \
   "A silently-skipped check is worse than a loud one — keep the stderr note."
 
+# --- assert_finalized: the `conflicting` rung (issue #51) ------------------------
+# A ready-but-unmergeable PR used to pass the WHOLE battery, so the worker's own exit
+# reported success on a deliverable that cannot land. The rung is LAST (only network
+# rung) and asserts ONLY on an explicit CONFLICTING, because GitHub computes
+# `mergeable` asynchronously and answers UNKNOWN for a few seconds after every push —
+# a strict check would stamp incomplete on healthy work whenever the API lagged.
+export GH_CALLS="$(sandbox_tmp)/gh-calls.txt"
+: >"$GH_CALLS"
+pr_views() { grep -c '^pr view' "$GH_CALLS" 2>/dev/null || true; }
+
+# explicit CONFLICTING -> the one case that asserts.
+: >"$GH_CALLS"
+assert_eq "conflicting" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=conflicting \
+  assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
+  "worker whose ready PR is CONFLICTING -> conflicting" \
+  "An explicit mergeable==CONFLICTING must assert the new last rung (issue #51)."
+
+# MERGEABLE -> finalized, and the lookup does not retry once it has a real answer.
+: >"$GH_CALLS"
+assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=mergeable \
+  assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
+  "worker whose ready PR is MERGEABLE -> finalized (no reason)" \
+  "A mergeable PR is the healthy case and must never be marked incomplete."
+assert_eq "1" "$(pr_views)" "a decisive first answer is not re-polled" \
+  "Re-polling should stop as soon as mergeable is anything other than UNKNOWN."
+
+# UNKNOWN first, then MERGEABLE — the realistic immediate-post-push sequence. Without
+# the re-poll this would be inconclusive on every healthy finish and the rung would
+# never fire for real.
+: >"$GH_CALLS"
+assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=unknown-then-mergeable \
+  assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
+  "UNKNOWN on the first poll then MERGEABLE -> finalized" \
+  "UNKNOWN is the EXPECTED post-push answer; it must be re-polled, not treated as final."
+assert_eq "2" "$(pr_views)" "the UNKNOWN answer triggered exactly one re-poll" \
+  "The first UNKNOWN must be re-polled; the resolved answer must end the loop."
+
+# UNKNOWN forever -> inconclusive -> NOT conflicting, bounded at 1 poll + 2 re-polls.
+: >"$GH_CALLS"
+assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=unknown \
+  assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
+  "UNKNOWN on every poll -> finalized (no false conflicting)" \
+  "A stuck UNKNOWN must never assert incomplete — only an explicit CONFLICTING may."
+assert_eq "3" "$(pr_views)" "the re-poll is bounded at 1 poll + 2 re-polls" \
+  "An unbounded poll loop would hang a worker's exit path on GitHub."
+mnote="$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=unknown \
+  assert_finalized worker "$WORKER_LOG" "$WT" 2>&1 >/dev/null)"
+assert_contains "$mnote" "mergeability lookup inconclusive" \
+  "an inconclusive mergeability lookup is noted on stderr" \
+  "The permissive path must be loud — a silently-skipped check hides a real conflict."
+
+# The wall-clock ceiling really is a ceiling: with no time left, the loop stops after
+# the first poll rather than sleeping into it.
+: >"$GH_CALLS"
+assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=unknown \
+  MERGEABLE_POLL_CEILING=0 assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
+  "a zero wall-clock ceiling still yields finalized, not conflicting" \
+  "The ceiling must bound the retry without changing the permissive outcome."
+assert_eq "1" "$(pr_views)" "the wall-clock ceiling cuts the re-poll loop short" \
+  "MERGEABLE_POLL_CEILING must be checked BEFORE each sleep so the sleeps are bounded too."
+
+# Every inconclusive shape is permissive: a non-zero gh exit, unparseable output, and
+# an unrecognized value all mean "not conflicting".
+for mode in fail garbage weird; do
+  assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE="$mode" \
+    assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
+    "mergeability lookup '$mode' -> no false 'conflicting'" \
+    "Only an explicit CONFLICTING may assert; everything else is inconclusive."
+  note="$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE="$mode" \
+    assert_finalized worker "$WORKER_LOG" "$WT" 2>&1 >/dev/null)"
+  assert_contains "$note" "mergeability lookup inconclusive" \
+    "the '$mode' mergeability lookup is noted on stderr" \
+    "Keep the one-line note on every inconclusive path."
+done
+
+# ORDER: the rung is reached only AFTER draft passes. A draft PR reports `draft` — and
+# makes NO mergeability call at all, so the cheap local/ladder answer never pays for a
+# network round-trip it doesn't need.
+: >"$GH_CALLS"
+assert_eq "draft" "$(FAKE_TMUX_STATE=absent FAKE_GH_MODE=draft FAKE_GH_MERGEABLE=conflicting \
+  assert_finalized worker "$WORKER_LOG" "$WT" 2>/dev/null)" \
+  "a draft PR reports 'draft', not 'conflicting'" \
+  "conflicting is the LAST rung; draft must win (see assert_finalized's order)."
+assert_eq "0" "$(pr_views)" "a draft PR makes no gh mergeability call" \
+  "The mergeability lookup must not run until the draft rung has passed."
+
+# …and the checker ladder is untouched: a checker does not own PR mergeability.
+: >"$GH_CALLS"
+printf '{"verdict":"pass"}\n' >"${CHECKER_LOG%.log}-verdict.json"
+assert_eq "" "$(FAKE_TMUX_STATE=absent FAKE_GH_MERGEABLE=conflicting \
+  assert_finalized checker "$CHECKER_LOG" "$WT" 2>/dev/null)" \
+  "a checker with a written verdict is finalized even against a CONFLICTING PR" \
+  "The checker ladder stays waiting -> noverdict; mergeability is the worker's problem."
+assert_eq "0" "$(pr_views)" "the checker ladder makes no gh mergeability call" \
+  "Adding the rung to the checker path would spend a network call on a non-concern."
+rm -f "${CHECKER_LOG%.log}-verdict.json"
+unset GH_CALLS
+
 # --- assert_finalized: checker --------------------------------------------------
 VERDICT="${CHECKER_LOG%.log}-verdict.json"
 rm -f "$VERDICT"
@@ -230,6 +362,30 @@ FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready \
 assert_contains "$(cat "$LED")" "status done" \
   "finalize_dispatch still records plain 'done' for a healthy run" \
   "A clean, pushed, ready-PR worker must record done — no false incomplete."
+
+# …and records incomplete-conflicting end-to-end for a ready-but-unmergeable PR — the
+# state that used to be recorded `done` (issue #51). The comment finalize_dispatch
+# posts must name the fix, not just the status: a bare status invited the observed
+# failure of re-verifying the PR instead of resolving the conflict.
+CONF_LOG="$LOGS/conflicting-issue-7.log"
+printf '{"type":"result","subtype":"success","is_error":false,"result":"done"}\n' >"$CONF_LOG"
+cat >"$LED" <<LEDGER
+- #7 | owner/demo | issue-7 | $CONF_LOG | pid 4245 | dispatched 2026-01-01T00:00:00Z | status dispatched
+LEDGER
+CONF_CALLS="$(sandbox_tmp)/conflicting-gh-calls.txt"
+: >"$CONF_CALLS"
+GH_CALLS="$CONF_CALLS" FAKE_TMUX_STATE=absent FAKE_GH_MODE=ready FAKE_GH_MERGEABLE=conflicting \
+  finalize_dispatch "$CONF_LOG" "$LED" 4245 "$WT" worker >/dev/null 2>&1 || true
+assert_contains "$(cat "$LED")" "status incomplete-conflicting" \
+  "finalize_dispatch records incomplete-conflicting for a ready-but-unmergeable PR" \
+  "A ready PR GitHub reports CONFLICTING must NOT be recorded done (issue #51)."
+posted="$(grep '^issue comment' "$CONF_CALLS" 2>/dev/null || true)"
+assert_contains "$posted" "merge origin/main" \
+  "the posted comment names the concrete fix (merge origin/main)" \
+  "A bare status invites re-verification instead of conflict resolution — keep the instruction."
+assert_contains "$posted" "CONFLICTING" \
+  "the posted comment names the PR as ready-but-unmergeable" \
+  "The comment must be actionable on its own — it is what the next worker reads."
 
 # --- the checker posts BOTH leads (issue #52) ------------------------------------
 # An interrupted checker used to post NOTHING countable, so CHECKER_LIMIT stayed frozen
