@@ -17,6 +17,8 @@
 #     worktrees that are MERGED + clean + not in-flight. Anything unmerged (even a
 #     closed-not-planned issue) is KEPT and reported — auto mode never deletes work
 #     that didn't make it onto the default branch. Conservative, like ledger-prune.
+#     Auto mode is ALSO the only mode that reaps dead tmux sessions; interactive mode
+#     deliberately leaves the tmux server alone (nothing to pick, nothing to confirm).
 #
 # THE SAFETY INVARIANT (both modes). The one thing a worktree can hold that GitHub
 # does NOT is LOCAL state: uncommitted edits, or commits never pushed. That is the
@@ -25,16 +27,30 @@
 # the default branch" signal is GitHub's **merged PR** bit — NOT git ancestry, which
 # a squash merge defeats (the merged branch tip is unreachable from main).
 #
+# AUTO MODE ALSO REAPS DEAD tmux SESSIONS (issue #53) — see reap_tmux_sessions below.
+# Same housekeeping instinct, different derivative: a finished `dr tmux-run` job leaves
+# its session behind on purpose, and nothing else ever clears it.
+#
 # Usage: worktree-prune.sh [--auto] [--dry-run] [--force]
 #   (no args)  interactive picker (needs a terminal)
-#   --auto     non-interactive: remove merged+clean worktrees, report the rest
-#   --dry-run  (auto) report what would be removed; touch nothing
+#   --auto     non-interactive: remove merged+clean worktrees, report the rest;
+#              also kill DEAD derail-* tmux sessions (never a live one)
+#   --dry-run  (auto) report what would be removed/reaped; touch nothing
 #   --force    (auto) also remove when only leftover UNTRACKED (non-gitignored)
 #              files are in the way — still NEVER when there are uncommitted tracked
 #              edits or unpushed commits. (Interactive mode confirms per-item instead.)
+#              --force has NO effect on tmux sessions: a live one is never killed.
 set -euo pipefail
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LEDGER="${LEDGER:-$ORCH/ledger.md}"
+
+# tmux_job_state (alive|dead|absent, keyed off `#{pane_dead}`) lives in
+# dispatch-common.sh. Sourced rather than reimplemented so the reaper's liveness probe
+# can never drift from the one the dispatch loop itself trusts — a probe that drifts
+# toward "looks finished" is exactly how this would start killing live compute.
+# dispatch-common.sh is pure function definitions; sourcing it has no side effects and
+# it declares no name this script uses.
+. "$ORCH/bin/dispatch-common.sh"
 
 MODE=interactive; DRY=0; FORCE=0
 for a in "$@"; do
@@ -165,9 +181,73 @@ auto_cb() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# reap_tmux_sessions — kill DEAD derail-* tmux sessions (auto mode only).
+#
+# WHY: tmux-run.sh sets `remain-on-exit on` so a FINISHED job's session lingers as a
+# dead pane for the next dispatch to inspect (load-bearing — tmux_job_state tells
+# 'exists-dead' from 'exists-alive' with it). Nothing ever clears them once they've
+# served that purpose, so a worker that exits-to-wait and is never re-dispatched
+# leaves its session for the rest of the machine's uptime. Bounded (the tmux server
+# dies on reboot) but not free: board-digest.sh walks every session once per digest.
+#
+# THE SAFETY RULE IS THE WHOLE POINT. An ALIVE session means a worker is legitimately
+# waiting on real compute — an R estimation, a simulation — and killing it destroys
+# work GitHub does NOT have (exactly the invariant the worktree half protects). So a
+# session is reaped iff BOTH hold:
+#   1. its name starts with `derail-`  (anything else on this machine is not ours), and
+#   2. tmux_job_state says `dead`      (liveness, never "the issue looks finished").
+# A live session is reported and left — not even --force kills one.
+#
+# No tmux on PATH, or no server running, is a clean no-op: this pruner must stay
+# useful on a machine that has never run a detached job.
+# Sets TMUX_PROBED=1 only when a server actually answered, so the summary line stays
+# silent on such a machine instead of printing a meaningless 0/0.
+# ---------------------------------------------------------------------------
+TMUX_REAPED=0; TMUX_ALIVE=0; TMUX_PROBED=0
+reap_tmux_sessions() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  local names name state
+  # No server running => list-sessions fails and says so on stderr; that is a no-op
+  # here, not an error, so swallow both.
+  names="$(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)"
+  [ -n "$names" ] || return 0
+  TMUX_PROBED=1
+  # here-string (NOT a pipe): a `while` on the right of a pipe runs in a subshell under
+  # bash 3.2 and the counters below would be lost.
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    case "$name" in derail-*) ;; *) continue ;; esac
+    state="$(tmux_job_state "$name")"
+    if [ "$state" = alive ]; then
+      echo "  keep tmux $name — pane alive (a worker is waiting on it)"
+      TMUX_ALIVE=$((TMUX_ALIVE+1))
+    elif [ "$state" = dead ]; then
+      if [ "$DRY" = 1 ]; then
+        echo "  would reap tmux $name — pane dead"
+      elif tmux kill-session -t "$name" 2>/dev/null; then
+        echo "  reaped tmux $name — pane dead"
+      else
+        echo "  ⚠ kill-session refused for tmux $name"; continue
+      fi
+      TMUX_REAPED=$((TMUX_REAPED+1))
+    fi
+    # `absent` (it vanished between the listing and the probe) needs no accounting.
+  done <<<"$names"
+  return 0
+}
+
 run_auto() {
   each_worktree auto_cb
+  reap_tmux_sessions
   echo "worktree-prune: removed $AUTO_REMOVED, kept $AUTO_KEPT"
+  if [ "$TMUX_PROBED" = 1 ]; then
+    if [ "$DRY" = 1 ]; then
+      echo "worktree-prune: tmux: would reap $TMUX_REAPED dead derail-* sessions, left $TMUX_ALIVE alive"
+    else
+      echo "worktree-prune: tmux: reaped $TMUX_REAPED dead derail-* sessions, left $TMUX_ALIVE alive"
+    fi
+  fi
 }
 
 # ===========================================================================

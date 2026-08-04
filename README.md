@@ -105,7 +105,10 @@ rounds trip the escalation while one fewer does not);
 `tmux-run.sh` name/log derivation, `--tail` validation, `{{SLUG}}` wiring,
 and (when `tmux` is present) the atomic-create mutex; the `scheduled_repos` allow-list
 reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` on an
-empty sandbox (the bash-3.2 regression net); `ledger-prune.sh` dead-pid pruning plus the
+empty sandbox (the bash-3.2 regression net) plus its dead-`derail-*`-tmux-session reaper
+(dead reaped / alive left / non-`derail-` untouched / `--dry-run` kills nothing / no
+server is a clean no-op — run against a private tmux socket, and SKIPped when `tmux` is
+absent); `ledger-prune.sh` dead-pid pruning plus the
 split no-clean-finish escalation (trailing `**Worker incomplete: incomplete-waiting`
 comments count against the loose `WORKER_WAIT_LIMIT`; every `**Worker interrupted:` and
 every other incomplete reason against `WORKER_LIMIT`; a mixed run tallies each class
@@ -312,6 +315,24 @@ dr worktree-prune --auto --dry-run # report only, remove nothing
 dr worktree-prune --auto --force   # also drop worktrees blocked solely by stray untracked files
 ```
 
+`--auto` also **reaps dead `derail-*` tmux sessions** — the leftovers of finished
+`dr tmux-run` jobs, which `tmux-run.sh` deliberately keeps around (`remain-on-exit`) so
+the next dispatch can inspect them, and which nothing else ever clears. A session is
+killed only when its pane is *dead*; a session whose pane is **alive** means a worker is
+waiting on real compute, so it is reported and left — not even `--force` kills one — and
+sessions that don't match the `derail-` prefix are never touched. `--dry-run` reports
+what it would reap and kills nothing; with no `tmux` on PATH (or no server running) the
+whole step is a silent no-op. The run's tail reports both counts:
+
+```
+  reaped tmux derail-owner-repo-98 — pane dead
+  keep tmux derail-owner-repo-99 — pane alive (a worker is waiting on it)
+worktree-prune: removed 0, kept 0
+worktree-prune: tmux: reaped 1 dead derail-* sessions, left 1 alive
+```
+
+Interactive mode is unchanged — it leaves the tmux server alone entirely.
+
 ### Day-to-day scheduler commands
 
 ```bash
@@ -389,7 +410,7 @@ derailleur/
 │   ├── dispatch-common.sh         Shared post-run helpers, sourced by both launchers
 │   ├── config-common.sh           Loads operator identity from orchestrator.conf (sourced)
 │   ├── ledger-prune.sh            Drop stale ledger entries at the start of every cycle
-│   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees
+│   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees (+ reap dead derail-* tmux sessions)
 │   ├── board-digest.sh            Deterministic board-state report (no LLM)
 │   ├── watch-dispatch.sh          Watch dispatched worker(s)/checker(s) to terminal state (local signals; no LLM)
 │   └── test.sh                    Two-tier test-suite runner (surfaced as `dr test`)
