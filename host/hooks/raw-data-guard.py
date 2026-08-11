@@ -143,7 +143,7 @@ def load_protected_prefixes() -> list[str]:
 
 def load_writable_prefixes() -> list[str]:
     """Canonical prefixes that stay WRITABLE even when nested under a protected
-    raw tree — an explicit allow-carveout over the raw denylist. Two sources:
+    raw tree — an explicit allow-carveout over the raw denylist. Three sources:
 
       1. `ORCH_LOGS_DIR` (env, set by the launcher) — the orchestrator's own
          logs dir. The checker writes its verdict JSON there; that dir is
@@ -154,16 +154,30 @@ def load_writable_prefixes() -> list[str]:
          *inside* a shared data tree (e.g. per-survey outputs/ + results/ under a
          Dropbox-symlinked data dir): raw_resolved blanket-protects the tree;
          these dirs punch back through.
+      3. manifest `derived_resolved` + `<data_root>/derived` — the shared derived
+         tree (hub #38). derived/ is WRITABLE by design: a worker whose issue is
+         "build the panel" must be able to write the artifact it is coding. Both
+         forms are carved out because the worktree reaches it as
+         `data/derived` (a symlink under data_root) while a write may resolve to
+         the real shared path. Carved out from `derived_resolved` directly rather
+         than relying on the author to also list data/derived in `output_paths` —
+         a repo that set the key and forgot the list would have its worker denied
+         mid-issue, which is exactly the failure this key exists to remove.
 
-    Author responsibility: never list a path that overlaps real raw data."""
+    Author responsibility: never list a path that overlaps real raw data. In
+    particular, never point `derived_resolved` inside the raw tree."""
     prefixes = []
     logs_dir = os.environ.get("ORCH_LOGS_DIR")
     if logs_dir:
         prefixes.append(os.path.realpath(os.path.expanduser(logs_dir)))
     r = _manifest_reader()
     if r:
-        data_root, _scalar, list_items = r
+        data_root, scalar, list_items = r
         prefixes += [canon(p, data_root) for p in list_items("output_paths") if p]
+        derived_resolved = scalar("derived_resolved")
+        if derived_resolved:
+            prefixes.append(canon(derived_resolved, data_root))
+            prefixes.append(canon("derived", data_root))
     return prefixes
 
 
@@ -219,7 +233,7 @@ def check_bash(command: str, protected: list[str], writable: list[str], cwd: str
             tgt = tgt.strip("\"'")
             if is_blocked(tgt, cwd, protected, writable):
                 emit_deny(f"Blocked write to read-only raw data: {tgt}. "
-                          "Raw data is read-only; write outputs under data/results/ (or figures/, tables/).")
+                          "Raw data is read-only; write outputs under data/derived/, data/results/ (or figures/, tables/).")
 
         # --- raw-data: mutating commands targeting protected paths ---
         sed_inplace = name == "sed" and any(a == "-i" or a.startswith("-i") for a in argv[1:])
@@ -232,13 +246,13 @@ def check_bash(command: str, protected: list[str], writable: list[str], cwd: str
         for arg in targets:
             if is_blocked(arg, cwd, protected, writable):
                 emit_deny(f"Blocked `{name}` writing read-only raw data: {arg}. "
-                          "Raw data is read-only; write outputs under data/results/ (or figures/, tables/).")
+                          "Raw data is read-only; write outputs under data/derived/, data/results/ (or figures/, tables/).")
 
 
 def check_file_write(path: str, protected: list[str], writable: list[str], cwd: str) -> None:
     if path and is_blocked(path, cwd, protected, writable):
         emit_deny(f"Blocked write to read-only raw data: {path}. "
-                  "Raw data is read-only; write outputs under data/results/ (or figures/, tables/).")
+                  "Raw data is read-only; write outputs under data/derived/, data/results/ (or figures/, tables/).")
 
 
 # ---- entrypoint ------------------------------------------------------------

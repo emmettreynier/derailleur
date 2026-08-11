@@ -101,9 +101,23 @@ REPO="$(yml repo)"
 WORKING_CLONE="$(expand "$(yml working_clone)")"
 WORKTREES_DIR="$(expand "$(yml worktrees_dir)")"
 RAW_RESOLVED="$(expand "$(yml raw_resolved)")"
+DERIVED_RESOLVED="$(expand "$(yml derived_resolved)")"   # optional; unset = byte-identical to pre-#38 behavior
 DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 OUTPUT_PATHS="$(yml_list output_paths)"
 CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
+
+# derived_resolved only takes effect on the DEFAULT bootstrap path. A repo that ships its
+# own setup-symlinks.sh owns its entire data/ layout, data/derived included, so the key is
+# inert there — and the dry-run must say so rather than advertising a share that will not
+# happen. Detected off the working clone, which is the same tree the worktree checks out.
+DERIVED_NOTE=""
+if [ -n "$DERIVED_RESOLVED" ]; then
+  if [ -x "$WORKING_CLONE/setup-symlinks.sh" ]; then
+    DERIVED_NOTE="IGNORED here — this repo ships setup-symlinks.sh, which owns data/derived"
+  else
+    DERIVED_NOTE="shared across worktrees, WRITABLE (races are an accepted risk)"
+  fi
+fi
 
 BRANCH="issue-$ISSUE"
 WORKTREE="$WORKTREES_DIR/$BRANCH"
@@ -153,11 +167,17 @@ build_cmd() {
   # deny, not an enumerated one: "deny all but Explore" is not expressible, and a
   # named list fails OPEN the next time an agent lands in ~/.claude/agents/.
   # Keep the deny — do not "simplify" it away. (issue #45)
+  # Layer-1 scoping. data/derived is a symlink OUT of the worktree when a manifest
+  # shares it across worktrees, so --add-dir must name its real path or the worker
+  # cannot write the panel its issue asks it to build. Appended only when the
+  # manifest sets derived_resolved, which keeps the assembled command byte-identical
+  # for every manifest that does not (the #38 non-breakage contract).
+  ADD_DIRS=( --add-dir "$WORKTREE" --add-dir "$RAW_RESOLVED" )
+  [ -n "$DERIVED_RESOLVED" ] && ADD_DIRS+=( --add-dir "$DERIVED_RESOLVED" )
   CMD=( env "ORCH_MANIFEST=$MANIFEST" claude -p "$TASK"
         --permission-mode bypassPermissions
         --settings "$SETTINGS_JSON"
-        --add-dir "$WORKTREE"
-        --add-dir "$RAW_RESOLVED"
+        "${ADD_DIRS[@]}"
         --disallowedTools Agent
         --max-budget-usd "$BUDGET"
         --append-system-prompt "$BRIEF"
@@ -174,6 +194,13 @@ if [ "$DRY" = 1 ]; then
 #   working clone : $WORKING_CLONE
 #   worktree      : $WORKTREE   (branch: $BRANCH)
 #   raw (RO)      : $RAW_RESOLVED   <- --add-dir + deny-hook protected
+INFO
+  # Printed only when configured, so a manifest without derived_resolved produces
+  # byte-identical dry-run output to before this key existed (#38 part (d)).
+  [ -n "$DERIVED_RESOLVED" ] && cat <<INFO
+#   derived       : $DERIVED_RESOLVED   <- $DERIVED_NOTE
+INFO
+  cat <<INFO
 #   outputs       : $OUTPUT_PATHS
 #   tools         : Agent DISABLED (no subagents: delegation escapes brief + Stop hook)
 #   deny-hook     : $HOOK   <- injected via --settings (PreToolUse)
@@ -207,7 +234,7 @@ fi
 # bootstrap_worktree_data (dispatch-common.sh) so both provision identical links —
 # see that function for the full rationale (issue #25: the DROPBOX_PROJ derivation
 # that doubled california-pesticides' path segment, and the missing --worker flag).
-bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS"
+bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS" "$DERIVED_RESOLVED"
 
 # Ledger: local execution state GitHub doesn't record. `pid` lets the digest
 # tell a live worker from a crashed one; `status` (dispatched/done/failed) is

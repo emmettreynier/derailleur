@@ -11,5 +11,8 @@ projects/*.yml
 # Per-operator identity config (scaffolded from orchestrator.conf.example)
 orchestrator.conf
 
+# Python bytecode — running the deny-hook (directly or via the test suite) writes it
+__pycache__/
+
 # macOS
 .DS_Store

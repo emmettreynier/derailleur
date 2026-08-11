@@ -536,7 +536,7 @@ report_mutation() {
   fi
 }
 
-# bootstrap_worktree_data <worktree> <raw_resolved> <working_clone> <dropbox_proj> <slug> [critical_paths]
+# bootstrap_worktree_data <worktree> <raw_resolved> <working_clone> <dropbox_proj> <slug> [critical_paths] [derived_resolved]
 # Provision a fresh worktree's machine-local (gitignored) data dirs BEFORE dispatch.
 # <critical_paths> (optional, 6th arg) is a comma-separated list of worktree-relative
 # paths a manifest declares load-bearing (issue #43); the gate below asserts every one.
@@ -557,7 +557,15 @@ report_mutation() {
 #       dropbox_proj. A SKIP/ERROR line means a link target was missing — surface it
 #       LOUDLY: the old `|| echo` guard never fired because setup-symlinks.sh exits 0 even
 #       when every link SKIPs, so an all-SKIP no-op looked like success.
-#   (b) default template — one read-only data/raw symlink + a writable results dir.
+#   (b) default template — one read-only data/raw symlink + a writable results dir, plus
+#       a WRITABLE data/derived symlink when the manifest sets derived_resolved. derived/
+#       is deliberately not read-only: a worker whose issue is "build the panel" has to be
+#       able to write the thing it is writing the code for. The cost is that two concurrent
+#       issues can race the same derived artifact — an accepted risk, documented rather
+#       than defended with locking (research-template AGENTS.md > Data; hub #38).
+#       Only branch (b) honors derived_resolved: a branch-(a) repo owns its whole symlink
+#       layout in its own setup-symlinks.sh, and clobbering that with `ln -sfn` here would
+#       fight the local escape hatch instead of deferring to it.
 # CODE-ONLY EXCEPTION: a self-hosting manifest points raw_resolved at the repo root
 # itself; when raw_resolved resolves to the same real path as working_clone there is NO
 # distinct data tree, so scaffolding a self-referential data/raw symlink is spurious
@@ -565,6 +573,7 @@ report_mutation() {
 bootstrap_worktree_data() {
   local worktree="$1" raw_resolved="$2" working_clone="$3" dropbox_proj="$4" slug="$5"
   local critical_paths="${6:-}"   # comma-separated, relative to the worktree root (issue #43)
+  local derived_resolved="${7:-}" # optional shared writable derived tree (hub #38); unset = no-op
   local raw_real clone_real own_script=0
   raw_real="$(cd "$raw_resolved" 2>/dev/null && pwd -P || echo "")"
   clone_real="$(cd "$working_clone" 2>/dev/null && pwd -P || echo "")"
@@ -589,9 +598,54 @@ bootstrap_worktree_data() {
       # (issue #43): declare the load-bearing links and the gate below asserts them.
       echo "note: setup-symlinks.sh reported SKIP/ERROR for one or more (optional) links (see output above)." >&2
     fi
+    # derived_resolved is INERT on this path, and that has to be said out loud. This repo's own
+    # script owns the whole data/ layout including data/derived, so nothing here provisions the
+    # shared tree — yet the manifest key implies one, and the deny-hook's carveout (which is
+    # manifest-driven, not bootstrap-driven) will happily permit writes to whatever data/derived
+    # actually is. An operator who set the key would otherwise believe worktrees share a derived
+    # tree while each quietly kept its own: the #25 class again, one layer up. Not a hard fail —
+    # the repo's script may well provision derived perfectly well on its own terms — but never
+    # silent.
+    if [ -n "$derived_resolved" ]; then
+      echo "⚠ derived_resolved is set but IGNORED for $slug: this repo ships its own" >&2
+      echo "  setup-symlinks.sh, which owns the data/ layout (data/derived included), so" >&2
+      echo "  nothing here links the shared tree. data/derived is whatever that script made." >&2
+      echo "  Either provision the share inside that script, or unset derived_resolved in" >&2
+      echo "  projects/$slug.yml so the manifest stops implying one." >&2
+    fi
   elif [ -n "$raw_resolved" ] && [ "$raw_real" != "$clone_real" ]; then
     mkdir -p "$worktree/data/results"
     ln -sfn "$raw_resolved" "$worktree/data/raw"
+    # WRITABLE, and shared across worktrees on purpose: expensive intermediates should not
+    # be recomputed in every worktree. Guarded so an unset key changes nothing.
+    if [ -n "$derived_resolved" ]; then
+      local dlink="$worktree/data/derived"
+      if [ ! -d "$derived_resolved" ]; then
+        echo "⚠ derived_resolved is set but does not resolve to a directory: $derived_resolved" >&2
+        echo "  Not linking data/derived — fix derived_resolved in projects/$slug.yml." >&2
+      elif [ -d "$dlink" ] && [ ! -L "$dlink" ]; then
+        # `ln -sfn` only declines to dereference when the destination is a SYMLINK. Against a
+        # real directory it creates the link INSIDE it (data/derived/<basename>), so sharing
+        # silently does not happen: the worker writes a private local dir and exits 0 — the
+        # #25 failure class. An empty dir is a leftover `mkdir -p` and safe to replace; a
+        # non-empty one means the repo tracks data/derived/ (e.g. a .gitkeep), which is
+        # genuinely incompatible with pointing that path at shared storage. Deleting tracked
+        # files to force it would dirty the worktree, so this is the operator's call, and the
+        # dispatch stops before `claude` is spawned rather than sharing nothing quietly.
+        if rmdir "$dlink" 2>/dev/null; then
+          ln -sfn "$derived_resolved" "$dlink"
+        else
+          echo "✗ dispatch aborted: $dlink is a non-empty real directory, but this manifest" >&2
+          echo "  sets derived_resolved, which requires data/derived to BE the shared symlink." >&2
+          echo "  Linking over it would nest the link inside it and share nothing (issue #25 class)." >&2
+          echo "  Resolve one way: stop tracking data/derived/ in the repo, or unset" >&2
+          echo "  derived_resolved in projects/$slug.yml." >&2
+          return 1
+        fi
+      else
+        ln -sfn "$derived_resolved" "$dlink"
+      fi
+    fi
   fi
 
   # ── Critical-path gate (issue #35/#43 — defense-in-depth for #25) ──────────────

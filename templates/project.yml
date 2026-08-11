@@ -36,10 +36,22 @@ worktrees_dir: {{WORKTREES_DIR}}
 # Data layout — data/ is machine-local and gitignored; each environment provides its
 # own, so nothing here is tracked in the repo. The launcher bootstraps each worktree
 # with:
-#   data/raw     -> symlink to raw_resolved   (READ-ONLY)
+#   data/raw     -> symlink to raw_resolved       (READ-ONLY)
+#   data/derived -> symlink to derived_resolved   (WRITABLE, shared; only if set)
 #   data/results -> writable worker output
 # raw_resolved keys the deny-hook, so raw protection holds regardless of how data/ is
 # provided on a given machine.
+#
+# The layout these three names come from is the research-repo standard defined by
+# emmettreynier/research-template (see its AGENTS.md > Data). This manifest ENFORCES that
+# standard operationally; the template DEFINES it. A repo that predates the standard, or
+# deliberately deviates, keeps its own setup-symlinks.sh plus critical_paths below — that
+# local escape hatch is why nothing here is required to conform.
+#
+# NOT provisioned into worktrees: the standard's `misc/` (a host-only Dropbox symlink for
+# data-use agreements, correspondence, scans). A worker has no need-to-know for any of it,
+# and --add-dir scoping — not the deny-hook — is what actually gates reads, so leaving
+# misc/ off the worktree is what keeps the confidentiality surface small. Do not add it.
 #
 # CODE-ONLY REPO (no research-data tree — e.g. a tooling repo, or derailleur
 # self-hosted): there is no raw tree to point at. Set BOTH data_root and raw_resolved
@@ -50,6 +62,29 @@ worktrees_dir: {{WORKTREES_DIR}}
 # projects/derailleur.yml for a worked example). Leave raw_paths/output_paths empty.
 data_root: {{DATA_ROOT}}
 raw_resolved: TODO              # raw tree data/raw points at; for a code-only repo, = working_clone (see above)
+# derived_resolved: OPTIONAL. The shared derived-data tree that data/derived points at.
+# Leave UNSET unless you want it: with no value, the launcher behaves exactly as it did
+# before this key existed — no data/derived link, and a byte-identical assembled command.
+#
+# Set it when intermediates are expensive enough that recomputing them in every worktree
+# is the bottleneck. Two consequences to accept before you do:
+#   1. It is WRITABLE, deliberately. A worker whose issue is "build the panel" has to be
+#      able to write the panel. Read-only here would make that class of issue impossible.
+#   2. Because it is shared AND writable, two concurrent issues touching the same derived
+#      artifact can RACE. Accepted and documented rather than defended with locking —
+#      everything under derived/ is regenerable from raw + code, so the blast radius is
+#      "redo some compute" (design.md principle 5), never lost data. If a race would be
+#      costly, don't set the key: per-worktree derived data is the safe default.
+# The deny-hook carves this path out of the raw denylist automatically, so you do NOT also
+# need to list data/derived in output_paths. Never point it inside the raw tree.
+#
+# LIMITATION — the key only takes effect on the DEFAULT bootstrap path. If your repo ships its
+# own setup-symlinks.sh (the branch-(a) escape hatch, which most pre-standard repos use), that
+# script owns the entire data/ layout including data/derived, and this key is INERT: the
+# launcher warns and links nothing. To share derived data there, provision it inside that
+# script, or retire the script and let the launcher own the layout. Check before setting it:
+#   test -x <working_clone>/setup-symlinks.sh && echo "branch (a) — derived_resolved is inert"
+#   derived_resolved: ~/Dropbox/projects/<area>/<project>/data/derived
 dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "available offline"
 # dropbox_proj: OPTIONAL. Only for a repo that ships its own setup-symlinks.sh AND whose
 # Dropbox root differs from that script's built-in default. The launcher runs the repo's

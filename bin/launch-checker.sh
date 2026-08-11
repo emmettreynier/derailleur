@@ -92,8 +92,24 @@ REPO="$(yml repo)"
 WORKING_CLONE="$(expand "$(yml working_clone)")"
 WORKTREES_DIR="$(expand "$(yml worktrees_dir)")"
 RAW_RESOLVED="$(expand "$(yml raw_resolved)")"
+DERIVED_RESOLVED="$(expand "$(yml derived_resolved)")"   # optional; unset = byte-identical to pre-#38 behavior
 DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
+
+# Same branch-(a) caveat as the worker (see launch-worker.sh). Note the label says WRITABLE
+# rather than RO: the checker drops Edit/Write and does not mutate BY POLICY, but it keeps
+# Bash and runs the same deny-hook with the same manifest, so the derived carveout permits a
+# shell redirect there exactly as it does under data/results. Claiming RO would describe a
+# guarantee the guard does not make; report_mutation is what actually catches mutation, and
+# its baseline covers the worktree.
+DERIVED_NOTE=""
+if [ -n "$DERIVED_RESOLVED" ]; then
+  if [ -x "$WORKING_CLONE/setup-symlinks.sh" ]; then
+    DERIVED_NOTE="IGNORED here — this repo ships setup-symlinks.sh, which owns data/derived"
+  else
+    DERIVED_NOTE="shared tree the worker wrote; WRITABLE via the guard (checker does not mutate by policy)"
+  fi
+fi
 
 # --- resolve the PR: branch, the issue it closes, and ready/draft state -------
 PR_JSON="$(gh pr view "$PR" -R "$REPO" --json isDraft,headRefName,closingIssuesReferences,state 2>/dev/null)" \
@@ -147,12 +163,15 @@ build_cmd() {
   # orchestrator's own logs/ (runtime state, never project raw data) even when a
   # self-hosting manifest's raw_resolved blankets the whole live clone. The deny-hook
   # treats ORCH_LOGS_DIR as an always-writable carveout; --add-dir grants Layer-1 access.
+  # The checker mutates no files but DOES re-run pipeline stages, so it must be able to
+  # READ the shared derived tree the worker wrote. Appended only when the manifest sets
+  # derived_resolved, keeping the command byte-identical for manifests that don't (#38).
+  ADD_DIRS=( --add-dir "$WORKTREE" --add-dir "$RAW_RESOLVED" --add-dir "$ORCH/logs" )
+  [ -n "$DERIVED_RESOLVED" ] && ADD_DIRS+=( --add-dir "$DERIVED_RESOLVED" )
   CMD=( env "ORCH_MANIFEST=$MANIFEST" "ORCH_LOGS_DIR=$ORCH/logs" claude -p "$TASK"
         --permission-mode bypassPermissions
         --settings "$SETTINGS_JSON"
-        --add-dir "$WORKTREE"
-        --add-dir "$RAW_RESOLVED"
-        --add-dir "$ORCH/logs"
+        "${ADD_DIRS[@]}"
         --disallowedTools Edit Write NotebookEdit Agent
         --max-budget-usd "$BUDGET"
         --append-system-prompt "$BRIEF"
@@ -169,6 +188,12 @@ if [ "$DRY" = 1 ]; then
 #   working clone : $WORKING_CLONE
 #   worktree      : $WORKTREE   (branch: $BRANCH)
 #   raw (RO)      : $RAW_RESOLVED   <- --add-dir + deny-hook protected
+INFO
+  # Printed only when configured — see launch-worker.sh for the byte-identical rationale.
+  [ -n "$DERIVED_RESOLVED" ] && cat <<INFO
+#   derived       : $DERIVED_RESOLVED   <- $DERIVED_NOTE
+INFO
+  cat <<INFO
 #   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)
 #                   Agent DISABLED (no subagents: delegation escapes brief + Stop hook)
 #   verdict file  : $VERDICT_FILE   <- $ORCH/logs writable (carveout + --add-dir)
@@ -201,7 +226,7 @@ fi
 # the checker only ever created a single `data/raw -> raw_resolved` symlink and never ran
 # a repo's own setup-symlinks.sh, so for a multi-tree repo (california-pesticides) it
 # pointed data/raw at the whole data dir and left derived/ absent (issue #25).
-bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS"
+bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS" "$DERIVED_RESOLVED"
 
 # Belt-and-suspenders mutation baseline: capture the worktree's tracked-file state
 # before the checker runs; we re-check after, so an accidental write surfaces here
