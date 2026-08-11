@@ -92,6 +92,7 @@ REPO="$(yml repo)"
 WORKING_CLONE="$(expand "$(yml working_clone)")"
 WORKTREES_DIR="$(expand "$(yml worktrees_dir)")"
 RAW_RESOLVED="$(expand "$(yml raw_resolved)")"
+DERIVED_RESOLVED="$(expand "$(yml derived_resolved)")"   # optional; unset = byte-identical to pre-#38 behavior
 DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
 
@@ -147,12 +148,15 @@ build_cmd() {
   # orchestrator's own logs/ (runtime state, never project raw data) even when a
   # self-hosting manifest's raw_resolved blankets the whole live clone. The deny-hook
   # treats ORCH_LOGS_DIR as an always-writable carveout; --add-dir grants Layer-1 access.
+  # The checker mutates no files but DOES re-run pipeline stages, so it must be able to
+  # READ the shared derived tree the worker wrote. Appended only when the manifest sets
+  # derived_resolved, keeping the command byte-identical for manifests that don't (#38).
+  ADD_DIRS=( --add-dir "$WORKTREE" --add-dir "$RAW_RESOLVED" --add-dir "$ORCH/logs" )
+  [ -n "$DERIVED_RESOLVED" ] && ADD_DIRS+=( --add-dir "$DERIVED_RESOLVED" )
   CMD=( env "ORCH_MANIFEST=$MANIFEST" "ORCH_LOGS_DIR=$ORCH/logs" claude -p "$TASK"
         --permission-mode bypassPermissions
         --settings "$SETTINGS_JSON"
-        --add-dir "$WORKTREE"
-        --add-dir "$RAW_RESOLVED"
-        --add-dir "$ORCH/logs"
+        "${ADD_DIRS[@]}"
         --disallowedTools Edit Write NotebookEdit Agent
         --max-budget-usd "$BUDGET"
         --append-system-prompt "$BRIEF"
@@ -169,6 +173,12 @@ if [ "$DRY" = 1 ]; then
 #   working clone : $WORKING_CLONE
 #   worktree      : $WORKTREE   (branch: $BRANCH)
 #   raw (RO)      : $RAW_RESOLVED   <- --add-dir + deny-hook protected
+INFO
+  # Printed only when configured — see launch-worker.sh for the byte-identical rationale.
+  [ -n "$DERIVED_RESOLVED" ] && cat <<INFO
+#   derived (RO)  : $DERIVED_RESOLVED   <- shared tree the worker wrote; checker reads it
+INFO
+  cat <<INFO
 #   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)
 #                   Agent DISABLED (no subagents: delegation escapes brief + Stop hook)
 #   verdict file  : $VERDICT_FILE   <- $ORCH/logs writable (carveout + --add-dir)
@@ -201,7 +211,7 @@ fi
 # the checker only ever created a single `data/raw -> raw_resolved` symlink and never ran
 # a repo's own setup-symlinks.sh, so for a multi-tree repo (california-pesticides) it
 # pointed data/raw at the whole data dir and left derived/ absent (issue #25).
-bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS"
+bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS" "$DERIVED_RESOLVED"
 
 # Belt-and-suspenders mutation baseline: capture the worktree's tracked-file state
 # before the checker runs; we re-check after, so an accidental write surfaces here

@@ -536,7 +536,7 @@ report_mutation() {
   fi
 }
 
-# bootstrap_worktree_data <worktree> <raw_resolved> <working_clone> <dropbox_proj> <slug> [critical_paths]
+# bootstrap_worktree_data <worktree> <raw_resolved> <working_clone> <dropbox_proj> <slug> [critical_paths] [derived_resolved]
 # Provision a fresh worktree's machine-local (gitignored) data dirs BEFORE dispatch.
 # <critical_paths> (optional, 6th arg) is a comma-separated list of worktree-relative
 # paths a manifest declares load-bearing (issue #43); the gate below asserts every one.
@@ -557,7 +557,15 @@ report_mutation() {
 #       dropbox_proj. A SKIP/ERROR line means a link target was missing — surface it
 #       LOUDLY: the old `|| echo` guard never fired because setup-symlinks.sh exits 0 even
 #       when every link SKIPs, so an all-SKIP no-op looked like success.
-#   (b) default template — one read-only data/raw symlink + a writable results dir.
+#   (b) default template — one read-only data/raw symlink + a writable results dir, plus
+#       a WRITABLE data/derived symlink when the manifest sets derived_resolved. derived/
+#       is deliberately not read-only: a worker whose issue is "build the panel" has to be
+#       able to write the thing it is writing the code for. The cost is that two concurrent
+#       issues can race the same derived artifact — an accepted risk, documented rather
+#       than defended with locking (research-template AGENTS.md > Data; hub #38).
+#       Only branch (b) honors derived_resolved: a branch-(a) repo owns its whole symlink
+#       layout in its own setup-symlinks.sh, and clobbering that with `ln -sfn` here would
+#       fight the local escape hatch instead of deferring to it.
 # CODE-ONLY EXCEPTION: a self-hosting manifest points raw_resolved at the repo root
 # itself; when raw_resolved resolves to the same real path as working_clone there is NO
 # distinct data tree, so scaffolding a self-referential data/raw symlink is spurious
@@ -565,6 +573,7 @@ report_mutation() {
 bootstrap_worktree_data() {
   local worktree="$1" raw_resolved="$2" working_clone="$3" dropbox_proj="$4" slug="$5"
   local critical_paths="${6:-}"   # comma-separated, relative to the worktree root (issue #43)
+  local derived_resolved="${7:-}" # optional shared writable derived tree (hub #38); unset = no-op
   local raw_real clone_real own_script=0
   raw_real="$(cd "$raw_resolved" 2>/dev/null && pwd -P || echo "")"
   clone_real="$(cd "$working_clone" 2>/dev/null && pwd -P || echo "")"
@@ -592,6 +601,16 @@ bootstrap_worktree_data() {
   elif [ -n "$raw_resolved" ] && [ "$raw_real" != "$clone_real" ]; then
     mkdir -p "$worktree/data/results"
     ln -sfn "$raw_resolved" "$worktree/data/raw"
+    # WRITABLE, and shared across worktrees on purpose: expensive intermediates should not
+    # be recomputed in every worktree. Guarded so an unset key changes nothing.
+    if [ -n "$derived_resolved" ]; then
+      if [ -d "$derived_resolved" ]; then
+        ln -sfn "$derived_resolved" "$worktree/data/derived"
+      else
+        echo "⚠ derived_resolved is set but does not resolve to a directory: $derived_resolved" >&2
+        echo "  Not linking data/derived — fix derived_resolved in projects/$slug.yml." >&2
+      fi
+    fi
   fi
 
   # ── Critical-path gate (issue #35/#43 — defense-in-depth for #25) ──────────────

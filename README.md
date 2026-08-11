@@ -173,6 +173,14 @@ never make it exit nonzero.
 
 ### Onboard a project
 
+The repo layout these manifests provision — `data/{raw,derived,results}`,
+`output/{figures,tables}`, and a host-only `misc/` that is deliberately *not* provisioned
+into worktrees — is the research-repo standard defined by
+[`research-template`](https://github.com/emmettreynier/research-template) (see its
+`AGENTS.md` > Data). Derailleur **enforces** that standard operationally; the template
+**defines** it. Conformance is opt-in: a repo that predates the standard keeps its own
+`setup-symlinks.sh` plus `critical_paths`, and onboarding it works unchanged.
+
 1. Choose an **archetype**: `git-native` (preferred — repo is git-only, data is a
    symlink) or `dropbox-native` (coauthored/legacy — repo lives in Dropbox).
 2. `dr new-project <owner/repo> [--archetype …] [--clone …] [--worktrees …]` —
@@ -182,7 +190,10 @@ never make it exit nonzero.
    confirm `data_root`/paths. **Code-only repo (no data tree)?** Point both
    `data_root` and `raw_resolved` at the repo root itself (same as `working_clone`)
    and leave `raw_paths`/`output_paths` empty — the launcher then skips the `data/`
-   scaffold (see `templates/project.yml` for why).
+   scaffold (see `templates/project.yml` for why). **Expensive intermediates?**
+   Optionally set `derived_resolved` to share one writable `data/derived` across
+   worktrees instead of recomputing per worktree — read the race caveat in
+   `templates/project.yml` first, and leave it unset if in doubt.
 4. Add the repo to the board + the "Needs Me" view (manual, GitHub Projects UI).
 5. **`dropbox-native` only:** pin the raw data "Available offline" in Dropbox
    (manual).
