@@ -106,6 +106,28 @@ assert_file_absent "$wt/data/derived" \
   "key SET but target missing: no dangling symlink is created" \
   "A dangling data/derived is worse than none — it looks provisioned."
 
+# `ln -sfn` only declines to dereference a SYMLINK destination. Against a pre-existing REAL
+# directory it links INSIDE it, so sharing silently does not happen and the worker writes a
+# private local dir — the #25 failure class. Both shapes of that collision are pinned here.
+wt="$FIX/wt-realdir-empty"; mkdir -p "$wt/data/derived"
+bootstrap_worktree_data "$wt" "$FIX/data/raw" "$FIX/clone" "" fake-slug "" "$FIX/data/derived" >/dev/null 2>&1 || true
+assert_eq "$FIX/data/derived" "$(readlink "$wt/data/derived" 2>/dev/null || echo NOT-A-SYMLINK)" \
+  "pre-existing EMPTY data/derived is replaced by the shared symlink" \
+  "An empty leftover mkdir -p must not make the link nest inside it."
+
+wt="$FIX/wt-realdir-full"; mkdir -p "$wt/data/derived"; touch "$wt/data/derived/.gitkeep"
+rc=0
+err="$(bootstrap_worktree_data "$wt" "$FIX/data/raw" "$FIX/clone" "" fake-slug "" \
+        "$FIX/data/derived" 2>&1 >/dev/null)" || rc=$?
+assert_rc 1 "$rc" \
+  "pre-existing NON-EMPTY data/derived aborts the dispatch" \
+  "Sharing cannot be provisioned here; proceeding would silently share nothing (#25 class)."
+assert_contains "$err" "nest the link inside it" \
+  "the abort explains the nesting failure it prevented"
+assert_file_absent "$wt/data/derived/$(basename "$FIX/data/derived")" \
+  "no nested link is left behind inside the real directory" \
+  "This is the exact artifact the bug produced: data/derived/<basename> instead of the link."
+
 # ---------------------------------------------------------------------------
 # The key is documented in the tracked template (real manifests are gitignored,
 # so the template is the only place an onboarder can learn the key exists).

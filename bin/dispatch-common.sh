@@ -604,11 +604,31 @@ bootstrap_worktree_data() {
     # WRITABLE, and shared across worktrees on purpose: expensive intermediates should not
     # be recomputed in every worktree. Guarded so an unset key changes nothing.
     if [ -n "$derived_resolved" ]; then
-      if [ -d "$derived_resolved" ]; then
-        ln -sfn "$derived_resolved" "$worktree/data/derived"
-      else
+      local dlink="$worktree/data/derived"
+      if [ ! -d "$derived_resolved" ]; then
         echo "⚠ derived_resolved is set but does not resolve to a directory: $derived_resolved" >&2
         echo "  Not linking data/derived — fix derived_resolved in projects/$slug.yml." >&2
+      elif [ -d "$dlink" ] && [ ! -L "$dlink" ]; then
+        # `ln -sfn` only declines to dereference when the destination is a SYMLINK. Against a
+        # real directory it creates the link INSIDE it (data/derived/<basename>), so sharing
+        # silently does not happen: the worker writes a private local dir and exits 0 — the
+        # #25 failure class. An empty dir is a leftover `mkdir -p` and safe to replace; a
+        # non-empty one means the repo tracks data/derived/ (e.g. a .gitkeep), which is
+        # genuinely incompatible with pointing that path at shared storage. Deleting tracked
+        # files to force it would dirty the worktree, so this is the operator's call, and the
+        # dispatch stops before `claude` is spawned rather than sharing nothing quietly.
+        if rmdir "$dlink" 2>/dev/null; then
+          ln -sfn "$derived_resolved" "$dlink"
+        else
+          echo "✗ dispatch aborted: $dlink is a non-empty real directory, but this manifest" >&2
+          echo "  sets derived_resolved, which requires data/derived to BE the shared symlink." >&2
+          echo "  Linking over it would nest the link inside it and share nothing (issue #25 class)." >&2
+          echo "  Resolve one way: stop tracking data/derived/ in the repo, or unset" >&2
+          echo "  derived_resolved in projects/$slug.yml." >&2
+          return 1
+        fi
+      else
+        ln -sfn "$derived_resolved" "$dlink"
       fi
     fi
   fi
