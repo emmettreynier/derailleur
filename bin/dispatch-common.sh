@@ -598,6 +598,21 @@ bootstrap_worktree_data() {
       # (issue #43): declare the load-bearing links and the gate below asserts them.
       echo "note: setup-symlinks.sh reported SKIP/ERROR for one or more (optional) links (see output above)." >&2
     fi
+    # derived_resolved is INERT on this path, and that has to be said out loud. This repo's own
+    # script owns the whole data/ layout including data/derived, so nothing here provisions the
+    # shared tree — yet the manifest key implies one, and the deny-hook's carveout (which is
+    # manifest-driven, not bootstrap-driven) will happily permit writes to whatever data/derived
+    # actually is. An operator who set the key would otherwise believe worktrees share a derived
+    # tree while each quietly kept its own: the #25 class again, one layer up. Not a hard fail —
+    # the repo's script may well provision derived perfectly well on its own terms — but never
+    # silent.
+    if [ -n "$derived_resolved" ]; then
+      echo "⚠ derived_resolved is set but IGNORED for $slug: this repo ships its own" >&2
+      echo "  setup-symlinks.sh, which owns the data/ layout (data/derived included), so" >&2
+      echo "  nothing here links the shared tree. data/derived is whatever that script made." >&2
+      echo "  Either provision the share inside that script, or unset derived_resolved in" >&2
+      echo "  projects/$slug.yml so the manifest stops implying one." >&2
+    fi
   elif [ -n "$raw_resolved" ] && [ "$raw_real" != "$clone_real" ]; then
     mkdir -p "$worktree/data/results"
     ln -sfn "$raw_resolved" "$worktree/data/raw"

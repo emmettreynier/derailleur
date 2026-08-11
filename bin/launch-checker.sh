@@ -96,6 +96,21 @@ DERIVED_RESOLVED="$(expand "$(yml derived_resolved)")"   # optional; unset = byt
 DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
 
+# Same branch-(a) caveat as the worker (see launch-worker.sh). Note the label says WRITABLE
+# rather than RO: the checker drops Edit/Write and does not mutate BY POLICY, but it keeps
+# Bash and runs the same deny-hook with the same manifest, so the derived carveout permits a
+# shell redirect there exactly as it does under data/results. Claiming RO would describe a
+# guarantee the guard does not make; report_mutation is what actually catches mutation, and
+# its baseline covers the worktree.
+DERIVED_NOTE=""
+if [ -n "$DERIVED_RESOLVED" ]; then
+  if [ -x "$WORKING_CLONE/setup-symlinks.sh" ]; then
+    DERIVED_NOTE="IGNORED here — this repo ships setup-symlinks.sh, which owns data/derived"
+  else
+    DERIVED_NOTE="shared tree the worker wrote; WRITABLE via the guard (checker does not mutate by policy)"
+  fi
+fi
+
 # --- resolve the PR: branch, the issue it closes, and ready/draft state -------
 PR_JSON="$(gh pr view "$PR" -R "$REPO" --json isDraft,headRefName,closingIssuesReferences,state 2>/dev/null)" \
   || { echo "could not read PR #$PR in $REPO" >&2; exit 1; }
@@ -176,7 +191,7 @@ if [ "$DRY" = 1 ]; then
 INFO
   # Printed only when configured — see launch-worker.sh for the byte-identical rationale.
   [ -n "$DERIVED_RESOLVED" ] && cat <<INFO
-#   derived (RO)  : $DERIVED_RESOLVED   <- shared tree the worker wrote; checker reads it
+#   derived       : $DERIVED_RESOLVED   <- $DERIVED_NOTE
 INFO
   cat <<INFO
 #   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)

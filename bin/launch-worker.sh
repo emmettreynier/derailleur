@@ -106,6 +106,19 @@ DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the rep
 OUTPUT_PATHS="$(yml_list output_paths)"
 CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
 
+# derived_resolved only takes effect on the DEFAULT bootstrap path. A repo that ships its
+# own setup-symlinks.sh owns its entire data/ layout, data/derived included, so the key is
+# inert there — and the dry-run must say so rather than advertising a share that will not
+# happen. Detected off the working clone, which is the same tree the worktree checks out.
+DERIVED_NOTE=""
+if [ -n "$DERIVED_RESOLVED" ]; then
+  if [ -x "$WORKING_CLONE/setup-symlinks.sh" ]; then
+    DERIVED_NOTE="IGNORED here — this repo ships setup-symlinks.sh, which owns data/derived"
+  else
+    DERIVED_NOTE="shared across worktrees, WRITABLE (races are an accepted risk)"
+  fi
+fi
+
 BRANCH="issue-$ISSUE"
 WORKTREE="$WORKTREES_DIR/$BRANCH"
 LOG="$ORCH/logs/${REPO_SLUG}-issue-${ISSUE}.log"
@@ -185,7 +198,7 @@ INFO
   # Printed only when configured, so a manifest without derived_resolved produces
   # byte-identical dry-run output to before this key existed (#38 part (d)).
   [ -n "$DERIVED_RESOLVED" ] && cat <<INFO
-#   derived (RW)  : $DERIVED_RESOLVED   <- shared across worktrees, WRITABLE (races are an accepted risk)
+#   derived       : $DERIVED_RESOLVED   <- $DERIVED_NOTE
 INFO
   cat <<INFO
 #   outputs       : $OUTPUT_PATHS

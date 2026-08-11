@@ -77,6 +77,13 @@ raw_resolved: TODO              # raw tree data/raw points at; for a code-only r
 #      costly, don't set the key: per-worktree derived data is the safe default.
 # The deny-hook carves this path out of the raw denylist automatically, so you do NOT also
 # need to list data/derived in output_paths. Never point it inside the raw tree.
+#
+# LIMITATION — the key only takes effect on the DEFAULT bootstrap path. If your repo ships its
+# own setup-symlinks.sh (the branch-(a) escape hatch, which most pre-standard repos use), that
+# script owns the entire data/ layout including data/derived, and this key is INERT: the
+# launcher warns and links nothing. To share derived data there, provision it inside that
+# script, or retire the script and let the launcher own the layout. Check before setting it:
+#   test -x <working_clone>/setup-symlinks.sh && echo "branch (a) — derived_resolved is inert"
 #   derived_resolved: ~/Dropbox/projects/<area>/<project>/data/derived
 dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "available offline"
 # dropbox_proj: OPTIONAL. Only for a repo that ships its own setup-symlinks.sh AND whose

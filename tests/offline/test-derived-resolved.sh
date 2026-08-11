@@ -128,11 +128,30 @@ assert_file_absent "$wt/data/derived/$(basename "$FIX/data/derived")" \
   "no nested link is left behind inside the real directory" \
   "This is the exact artifact the bug produced: data/derived/<basename> instead of the link."
 
+# A repo shipping its own setup-symlinks.sh owns the whole data/ layout, so the key is inert
+# there. Defensible as a design choice, indefensible as a SILENT one: most pre-standard repos
+# are branch (a), so an operator who set the key would believe worktrees share a derived tree
+# while each quietly kept its own. The warning is the contract.
+wt="$FIX/wt-own-script"; mkdir -p "$wt"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$wt/setup-symlinks.sh"
+chmod +x "$wt/setup-symlinks.sh"
+err="$(bootstrap_worktree_data "$wt" "$FIX/data/raw" "$FIX/clone" "" fake-slug "" \
+        "$FIX/data/derived" 2>&1 >/dev/null || true)"
+assert_contains "$err" "derived_resolved is set but IGNORED" \
+  "branch (a) repo: an inert derived_resolved is reported, not silently skipped" \
+  "A silent no-op here is the #25 class one layer up — the operator believes sharing is on."
+assert_file_absent "$wt/data/derived" \
+  "branch (a) repo: no data/derived link is fabricated" \
+  "The repo's own script owns this path; the launcher must not fight it."
+
 # ---------------------------------------------------------------------------
 # The key is documented in the tracked template (real manifests are gitignored,
 # so the template is the only place an onboarder can learn the key exists).
 # ---------------------------------------------------------------------------
 tpl="$(cat "$REPO_ROOT/templates/project.yml")"
+assert_contains "$tpl" "setup-symlinks.sh" \
+  "templates/project.yml documents the branch-(a) limitation where the key is inert" \
+  "Without this, the key reads as universally available; 4 of 6 real manifests are branch (a)."
 assert_contains "$tpl" "derived_resolved" \
   "templates/project.yml documents derived_resolved"
 assert_contains "$tpl" "research-template" \
