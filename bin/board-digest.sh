@@ -33,7 +33,14 @@ PROJECT="$BOARD_PROJECT"
 command -v gh >/dev/null  || { echo "board-digest: gh not found" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "board-digest: python3 not found" >&2; exit 1; }
 
-board_json="$(gh project item-list "$PROJECT" --owner "$OWNER" --format json --limit 200)"
+# The board query is the digest's ONLY source of issue labels (routing lives on the
+# ISSUE — see the classification block below), so a truncated page does not merely hide
+# rows: the issues it drops look UNLABELLED, and their PRs are silently misrouted. A
+# `checked-pass` PR whose issue fell off the page never reaches the merge gate and is
+# re-checked every cycle at a full CHECKER_BUDGET; `hold`/`blocked` stop parking work.
+# Keep this far above the board's real size, and shout if we ever reach it.
+BOARD_LIMIT="${BOARD_LIMIT:-1000}"
+board_json="$(gh project item-list "$PROJECT" --owner "$OWNER" --format json --limit "$BOARD_LIMIT")"
 closed_json="$(gh search issues --owner "$PR_OWNER" --state closed \
   --json number,repository,closedAt --limit 100 2>/dev/null || echo '[]')"
 
@@ -75,13 +82,17 @@ else
   tmux_live=""
 fi
 
-BOARD_JSON="$board_json" CLOSED_JSON="$closed_json" PR_OWNER="$PR_OWNER" \
+BOARD_JSON="$board_json" CLOSED_JSON="$closed_json" PR_OWNER="$PR_OWNER" BOARD_LIMIT="$BOARD_LIMIT" \
 OPERATOR_NAME="$OPERATOR_NAME" SCHEDULED_ALLOW="$scheduled_allow" TMUX_LIVE="$tmux_live" \
 LEDGER="$LEDGER" DONE_DAYS="$DONE_DAYS" ONBOARDED_SLUGS="$onboarded_slugs" python3 <<'PY'
 import json, os, re, subprocess, sys
 from datetime import datetime, timezone, timedelta
 
 board  = json.loads(os.environ["BOARD_JSON"]).get("items", [])
+# A full page means the query almost certainly truncated. Never silent: a dropped row
+# reads as an unlabelled issue, which misroutes its PR (see the BOARD_LIMIT note above).
+board_limit = int(os.environ.get("BOARD_LIMIT") or 0)
+board_truncated = bool(board_limit) and len(board) >= board_limit
 closed = json.loads(os.environ["CLOSED_JSON"])
 pr_owner = os.environ.get("PR_OWNER", "")
 operator = os.environ.get("OPERATOR_NAME", "the operator")
@@ -298,6 +309,12 @@ out = []
 def w(s=""): out.append(s)
 
 w(f"# Board digest — {now.strftime('%Y-%m-%d %H:%M UTC')}")
+if board_truncated:
+    w(f"> ⚠ **BOARD QUERY TRUNCATED — this digest is not trustworthy.** The board returned "
+      f"{len(board)} items, the query limit. Issues past the cut are missing, and because "
+      f"routing labels are read from the board they read as *unlabelled*: their PRs are "
+      f"misrouted (a `checked-pass` PR is sent back to a checker, `hold`/`blocked` stop "
+      f"parking work). Re-run with a higher `BOARD_LIMIT` before acting on anything below.")
 w(f"_Scoped to onboarded repos ({', '.join(sorted(onboarded)) or 'none'}) — the orchestrator's dispatchable world._")
 if paused:
     w(f"_Autonomous-dispatch allow-list active — repos marked ⏸ scheduler-paused "
