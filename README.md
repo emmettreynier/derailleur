@@ -145,7 +145,14 @@ the `bootstrap_worktree_data` critical raw-link gate across all four states
 (missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
 manifest → exempt); and the runner's own worktree guard (two fake checkouts: cwd in the
 other one → refuses and names both trees; unrelated repo / same tree / symlinked same
-tree / non-git cwd → runs; the tree-under-test banner present either way). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
+tree / non-git cwd → runs; the tree-under-test banner present either way); and
+`board-digest.sh`'s open-PR bucketing against fixture board + PR JSON through a `gh`
+shim (a **ready** PR whose issue carries `resume` routes to the worker's court and
+appears in the resume bucket exactly once; a live worker, `hold` or `blocked` suppress
+it there exactly as they do for a draft; `needs-input` stays in the operator's section
+only; draft + `resume` unchanged; a worker's-court PR whose closing-issue board row
+can't be resolved gets a named `⚠` line instead of vanishing; and every case makes the
+same three `gh` calls). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
 and is byte-identical before/after.
 
 **What the online tier covers:** `board-digest.sh` emits a digest against the live

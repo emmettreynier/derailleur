@@ -317,6 +317,11 @@ w()
 # silently stranded first-time-interrupted workers (see design.md discussion).
 # draft+live         -> a working worker (already shown in the In-flight section).
 # ready+checked-pass (or human-approved) -> the operator's merge gate (their court).
+# ready+resume, no live worker, nothing parking it -> WORKER'S COURT too: the PR has
+#   been handed back to a worker but never re-drafted (a worker that died between
+#   un-drafting and clearing `resume`, a reconciler that labels without flipping, or
+#   the operator marking it ready early). Same court as its draft sibling — it used
+#   to fall through to a bare `pass` and appear in NO bucket at all (issue #69).
 # ready+needs-input -> checker escalated -> shown via the issue's needs-input row.
 # ready, otherwise  -> checker's court (awaiting/needing a checker).
 def short_repo(nwo_str): return nwo_str.split("/")[-1]
@@ -350,14 +355,20 @@ def pr_issue_row(pr):  # the board row for whichever issue this PR closes
 approved, awaiting_check, worker_court_prs = [], [], []
 for pr in open_pr_list:
     ilabs = pr_issue_labels(pr)
+    parked = bool(ilabs & {NEEDS_INPUT, HOLD, BLOCKED})   # same guards for draft & ready
     if pr.get("isDraft"):
-        if not pr_has_live_worker(pr) and not (ilabs & {NEEDS_INPUT, HOLD, BLOCKED}):
+        if not pr_has_live_worker(pr) and not parked:
             worker_court_prs.append(pr)   # nobody working it, nothing parking it -> dispatch
     elif CHECKED_PASS in ilabs or pr.get("reviewDecision") == "APPROVED":
         approved.append(pr)               # checker passed (or human-approved) -> merge gate
+    elif RESUME in ilabs and not parked and not pr_has_live_worker(pr):
+        worker_court_prs.append(pr)       # handed back but never re-drafted -> dispatch (#69)
     elif NEEDS_INPUT in ilabs or RESUME in ilabs:
-        pass                              # escalated (needs-input) or handed back (resume)
-                                          # -> surfaced via its issue row; not the checker's court
+        pass                              # needs-input: escalated -> surfaced via its issue
+                                          # row at :Needs-the-operator below. resume that got
+                                          # here is parked (hold/blocked/needs-input) or has a
+                                          # live worker (shown in In-flight) — deliberately
+                                          # NOT the checker's court either way.
     else:
         awaiting_check.append(pr)         # ready, not passed, not handed back -> checker's court
 
@@ -374,17 +385,25 @@ w(f"**needs-definition ({len(nd)}):**")
 w()
 
 # ---- DISPATCH CANDIDATES (worker's court) -----------------------------------
-# resume = a draft PR with no live worker and nothing parking it (needs-input/
-# hold/blocked) — derived structurally above from PR + ledger state, so it
-# catches checker-bounced work, operator hand-backs, AND crashed-first-attempt
-# workers uniformly, with no dependency on a `resume` label having been written.
-# A bare `resume` label with no open PR (rare — e.g. hand-labeled) is included
-# too, defensively. Plus fresh actionable issues with NO open PR at all (an open
-# PR means the issue is already in the loop — working or in review).
-resume, _seen = [], set()
+# resume = an open PR in the worker's court (classified above): a draft PR, or a
+# ready one whose issue carries `resume` — in both cases with no live worker and
+# nothing parking it (needs-input/hold/blocked). Derived structurally from PR +
+# ledger state, so it catches checker-bounced work, operator hand-backs, AND
+# crashed-first-attempt workers uniformly, with no dependency on a `resume` label
+# having been written. A bare `resume` label with no open PR (rare — e.g.
+# hand-labeled) is included too, defensively. Plus fresh actionable issues with NO
+# open PR at all (an open PR means the issue is already in the loop — working or in
+# review).
+# A worker's-court PR is dispatched *as its closing issue's board row*, so one whose
+# row can't be resolved (no `Closes #N`, or the issue isn't on the board) has no row
+# to list — it is REPORTED below rather than dropped, which is what let a whole PR
+# vanish from the digest (issue #69).
+resume, unrouted, _seen = [], [], set()
 for pr in worker_court_prs:
     r = pr_issue_row(pr)
-    if r and (k := (nwo(r["repo_url"]), r["num"])) not in _seen:
+    if r is None:
+        unrouted.append(pr); continue
+    if (k := (nwo(r["repo_url"]), r["num"])) not in _seen:
         _seen.add(k); resume.append(r)
 for r in rows:
     if has(r, RESUME) and issue_pr(r) is None and (k := (nwo(r["repo_url"]), r["num"])) not in _seen:
@@ -400,6 +419,13 @@ actionable = [
 w(f"## Dispatch candidates — worker's court ({len(resume)+len(actionable)})")
 w(f"**resume — revisions to re-dispatch ({len(resume)}):**")
 [w(line(r)) for r in resume] or w("- none")
+if unrouted:
+    # Not dispatchable from the digest (no board row to name), so deliberately NOT
+    # counted as a candidate above — but never silent: the operator either adds the
+    # issue to the board or dispatches by hand.
+    w(f"**⚠ worker's court, not dispatchable — closing issue not on the board ({len(unrouted)}):**")
+    for pr in unrouted:
+        w(pr_line(pr, "  ⚠ no board row for its closing issue — add it to the board, or dispatch by hand"))
 # Each actionable candidate carries its acceptance criteria so the orchestrator
 # can apply the intake gate from the digest alone (dig deeper only if unsure).
 w(f"**actionable, no open PR (Up Next / In Progress) ({len(actionable)}):**")
