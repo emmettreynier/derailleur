@@ -115,7 +115,16 @@ reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` 
 empty sandbox (the bash-3.2 regression net) plus its dead-`derail-*`-tmux-session reaper
 (dead reaped / alive left / non-`derail-` untouched / `--dry-run` kills nothing / no
 server is a clean no-op — run against a private tmux socket, and SKIPped when `tmux` is
-absent); `ledger-prune.sh` dead-pid pruning plus the
+absent); `ledger-prune.sh` dead-pid pruning, its
+reconcile-before-prune pass (a dead-pid `dispatched` checker with a complete verdict gets
+its label applied from the verdict file, a terminal status, and no duplicate label or
+comment on a re-run; with no verdict it reaches `incomplete-noverdict` and posts the
+countable checker comment; a live pid is left untouched; a round-2 verdict is still
+published on a PR that already carries a round-1 verdict comment, while a comment the
+reconciler cannot post routes nothing at all — no label, no draft flip; an unowned verdict
+JSON in `logs/` is reported only when its label never landed, and the sweep's own local
+dead ends are named rather than swallowed; and an entry pruned while still non-terminal
+names its log and whether a verdict file was found), plus the
 split no-clean-finish escalation (trailing `**Worker incomplete: incomplete-waiting`
 comments count against the loose `WORKER_WAIT_LIMIT`; every `**Worker interrupted:` and
 every other incomplete reason — `incomplete-conflicting` included — against
@@ -429,7 +438,7 @@ derailleur/
 │   ├── launch-orchestrator.sh     Boot an (interactive or scheduled) orchestrator session
 │   ├── dispatch-common.sh         Shared post-run helpers, sourced by both launchers
 │   ├── config-common.sh           Loads operator identity from orchestrator.conf (sourced)
-│   ├── ledger-prune.sh            Drop stale ledger entries at the start of every cycle
+│   ├── ledger-prune.sh            Reconcile, then drop, stale ledger entries at cycle start
 │   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees (+ reap dead derail-* tmux sessions)
 │   ├── board-digest.sh            Deterministic board-state report (no LLM)
 │   ├── watch-dispatch.sh          Watch dispatched worker(s)/checker(s) to terminal state (local signals; no LLM)

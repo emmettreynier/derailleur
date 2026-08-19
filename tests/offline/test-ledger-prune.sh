@@ -12,13 +12,17 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SB="$(new_sandbox)"
 write_filled_conf "$SB"
 sandbox_copy_script "$SB" config-common
+sandbox_copy_script "$SB" dispatch-common   # sourced by ledger-prune for reconcile-before-prune
 sandbox_copy_script "$SB" ledger-prune
 LP="$SB/bin/ledger-prune.sh"
 
 SHIM="$(fake_gh_on_path "$(sandbox_tmp)")"   # gh → exit 0, empty stdout ⇒ state unknown ⇒ keep
 
 # Fixture ledger: a dead-pid worker (must be pruned) + a live-pid worker (must be kept).
-# status=dispatched (not "interrupted") so no gh-driven escalation path is taken.
+# status=dispatched (not "interrupted") so no gh-driven escalation path is taken. The
+# dead-pid line is now RECONCILED first (issue #63) — with no manifest in this sandbox its
+# worktree is unresolvable, so it lands on `unknown` and is then pruned as before. The
+# reconciler's own three cases live in tests/offline/test-ledger-reconcile.sh.
 LED="$SB/ledger-fixture.md"
 cat >"$LED" <<LEDGER
 - #10 | owner/demo | issue-10 | $SB/logs/demo-issue-10.log | pid 99999999 | dispatched 2026-01-01T00:00:00Z | status dispatched

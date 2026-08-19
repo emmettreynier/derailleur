@@ -30,6 +30,7 @@ OPEN_NUM="$(gh issue list -R "$REPO" --state open -L 1 --json number -q '.[0].nu
 
 SB="$(new_sandbox)"
 sandbox_copy_script "$SB" config-common
+sandbox_copy_script "$SB" dispatch-common   # sourced by ledger-prune for reconcile-before-prune
 sandbox_copy_script "$SB" ledger-prune
 cp "$REAL_CONF" "$SB/orchestrator.conf"   # real identity so the guard passes (gitignored source)
 LP="$SB/bin/ledger-prune.sh"

@@ -163,4 +163,9 @@ signal with a comment + an issue label. You NEVER merge; merging is always {{OPE
       gh issue edit {{ISSUE}} -R {{REPO}} --add-label needs-input
     Leave the PR ready (don't un-draft); it's {{OPERATOR_NAME}}'s court now.
 
+Write the verdict JSON FIRST, then post + label: the JSON on disk is what survives if the
+session is cut off between the two, and `bin/ledger-prune.sh` recovers the routing from it on
+the next cycle (issue #63 — the verdict→label mapping above is mirrored in `verdict_label` in
+`bin/dispatch-common.sh`; if you ever change one, change the other).
+
 Finish by printing a one-line summary: VERDICT <verdict> on PR #{{PR}} — <action taken>.

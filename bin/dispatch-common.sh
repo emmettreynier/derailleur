@@ -219,8 +219,13 @@ _pr_mergeable() {
   return 0
 }
 
-# assert_finalized <kind> <log> <worktree> -> prints "" when the dispatch actually
-# finalized something, else ONE reason token naming the first failed check.
+# assert_finalized <kind> <log> <worktree> [repo] -> prints "" when the dispatch
+# actually finalized something, else ONE reason token naming the first failed check.
+#
+# [repo] is an optional `owner/repo` override for a caller whose worktree can no longer
+# answer for it — ledger-prune.sh's reconciler runs long after the dispatch, possibly
+# after worktree-prune removed the tree, and carries the repo on the ledger line instead
+# (issue #63). Unset/empty keeps the original behaviour: derive it from the worktree.
 #
 # WHY (issue #40): a clean exit-0 is not the same as a finished job. A worker that
 # hands a long run to `dr tmux-run` is told to exit cleanly and let the next dispatch
@@ -248,10 +253,11 @@ _pr_mergeable() {
 # local, deterministic signals (git, the filesystem, tmux) — plus an *explicit*
 # `mergeable == "CONFLICTING"` from GitHub — may assert one.
 assert_finalized() {
-  local kind="$1" log="$2" worktree="$3"
+  local kind="$1" log="$2" worktree="$3" repo_in="${4:-}"
   local num repo tmux_name
   num="$(_log_dispatch_num "$log")"
-  repo="$(_worktree_repo "$worktree")"
+  repo="$repo_in"
+  [ -n "$repo" ] || repo="$(_worktree_repo "$worktree")"
 
   # (1) waiting — a detached run for this task is still going (both roles).
   # The session name is a pure function of the task (tmux-run.sh:87); issue and PR
@@ -416,6 +422,29 @@ finalize_dispatch() {
   # reset so the scheduler defers the next fire instead of dispatching into a 429.
   [ "$st" = "interrupted-ratelimit" ] && record_usage_reset "$log"
 
+  report_no_clean_finish "$kind" "$st" "$log" "$worktree"
+}
+
+# report_no_clean_finish <kind> <status> <log> <worktree> [repo] [num] — the shared tail
+# of a dispatch that did not finish cleanly: push commits the next dispatch would
+# otherwise strand, then leave the ONE countable comment the caps read.
+#
+# EXTRACTED from finalize_dispatch (issue #63) so it can also run from OUTSIDE the
+# dispatched session. When a session is killed outright — SIGKILL, host sleep, OOM — the
+# trailing `bash -c` chain run_in_new_session appends never reaches finalize_dispatch at
+# all, so none of this ever ran: no push, and no `**Worker/Checker interrupted:` comment,
+# which is what left the round uncountable and the same PR re-checked at a full
+# CHECKER_BUDGET every cycle. ledger-prune.sh's reconciler calls this directly instead.
+# It must stay the SINGLE place these bodies are written: the caps match on the LEAD, so a
+# second copy that drifted would silently stop counting.
+#
+# [repo] / [num] are overrides for a caller with no usable worktree (a reconciler running
+# after worktree-prune removed it): `repo` normally comes from the worktree's origin
+# remote and a worker's issue number from its branch name, neither of which survives that.
+# `num` is the issue number for a worker, the PR number for a checker — the same numbers
+# the unassisted derivations produce, so passing them changes nothing but the source.
+report_no_clean_finish() {
+  local kind="$1" st="$2" log="$3" worktree="$4" repo_in="${5:-}" num_in="${6:-}"
   # A hard stop (budget cap, rate limit, crash) never reaches the worker's own
   # `git push`, and never fires the Stop hook (there's no clean-exit event to
   # hook) — so a local commit would otherwise sit invisible until SOME future
@@ -446,11 +475,14 @@ finalize_dispatch() {
   # CHECKER_BUDGET with CHECKER_LIMIT frozen at zero. Same hole #40 closed worker-side.
   local lead="interrupted"
   case "$st" in incomplete-*) lead="incomplete" ;; esac
-  local repo; repo="$(_worktree_repo "$worktree")"
+  local repo="$repo_in"
+  [ -n "$repo" ] || repo="$(_worktree_repo "$worktree")"
 
   if [ "$kind" = "worker" ]; then
-    local issue
-    issue="$(git -C "$worktree" branch --show-current 2>/dev/null | sed -nE 's/^issue-([0-9]+)$/\1/p')"
+    local issue="$num_in"
+    if [ -z "$issue" ]; then
+      issue="$(git -C "$worktree" branch --show-current 2>/dev/null | sed -nE 's/^issue-([0-9]+)$/\1/p')"
+    fi
     if [ -n "$repo" ] && [ -n "$issue" ]; then
       local body
       if [ "$st" = "incomplete-conflicting" ]; then
@@ -469,7 +501,8 @@ finalize_dispatch() {
   elif [ "$kind" = "checker" ]; then
     # PR number comes from the LOG basename, not the branch: a checker runs in the
     # worker's `issue-N` worktree, so the branch names the issue, not the PR.
-    local pr; pr="$(_log_dispatch_num "$log")"
+    local pr="$num_in"
+    [ -n "$pr" ] || pr="$(_log_dispatch_num "$log")"
     if [ -n "$repo" ] && [ -n "$pr" ]; then
       local cbody
       if [ "$lead" = "incomplete" ]; then
@@ -481,6 +514,212 @@ finalize_dispatch() {
         >>"$log" 2>&1 || echo "  ⚠ could not post $lead comment on $repo#$pr" >&2
     fi
   fi
+}
+
+# ── reconciling a dispatch that DIED before finalize_dispatch (issue #63) ─────────────
+# finalize_dispatch runs INSIDE the dispatched session, appended to run_in_new_session's
+# trailing `bash -c` chain. A session killed outright never reaches it, so its ledger line
+# stays at `status dispatched` against a pid that is already gone, and — for a checker — a
+# review that COMPLETED evaporates: the verdict JSON is on disk, but the label the brief
+# tells the checker to apply as its last act was never applied, so the PR never reaches the
+# operator's merge gate and nothing countable is posted. The three helpers below are what
+# lets ledger-prune.sh redo that finalization from outside the dead process.
+
+# reconciled_status <kind> <log> <worktree> [repo] -> the terminal status a dispatch that
+# died before finalize_dispatch should carry: classify_result on the log, then the
+# assert_finalized battery for its kind.
+#
+# Differs from finalize_dispatch in exactly one place, deliberately: `unknown` gets the
+# battery too. finalize_dispatch consults assert_finalized only after a `done`
+# classification because it judges a process it just watched exit normally — there IS a
+# result JSON to read. A reconciler judges a process that was KILLED, which is precisely
+# why nothing finalized it: no result JSON was ever written (the observed case had a 0-byte
+# log), so `unknown` is the EXPECTED classification here, not an anomaly. Refusing the
+# battery there would leave every reconciled entry at `unknown`, reporting nothing about
+# whether the deliverable actually landed — and the verdict JSON sitting in logs/ is
+# exactly the evidence that decides it.
+#
+# An explicit `interrupted-*` keeps its status, as in finalize_dispatch: it names a real
+# cause (rate limit, budget cap) the battery cannot improve on.
+reconciled_status() {
+  local kind="$1" log="$2" worktree="$3" repo="${4:-}"
+  local st reason
+  st="$(classify_result "$log")"
+  case "$st" in
+    done|unknown)
+      reason="$(assert_finalized "$kind" "$log" "$worktree" "$repo")"
+      if [ -n "$reason" ]; then st="incomplete-$reason"; else st="done"; fi ;;
+  esac
+  printf '%s\n' "$st"
+  return 0
+}
+
+# verdict_of <verdict-file> -> the `verdict` field, or empty when the file is missing,
+# unparseable, or carries no verdict. Same "unparseable -> empty" rule as
+# assert_finalized's noverdict rung, so the two can never disagree about whether a
+# checker produced a usable deliverable.
+verdict_of() {
+  local vf="${1:-}"
+  if [ ! -f "$vf" ]; then
+    printf ''
+    return 0
+  fi
+  jq -r '.verdict // empty' "$vf" 2>/dev/null || printf ''
+  return 0
+}
+
+# verdict_label <verdict> -> the issue label that verdict routes to (empty if the verdict
+# token is unrecognized).
+#
+# THE ONE COPY of the checker's verdict -> label mapping outside the brief.
+# briefs/checker-brief.md tells the CHECKER to apply these itself, as its last act, which
+# is exactly why the mapping has to exist here as well: a death between writing the verdict
+# JSON and running `gh issue edit` keeps the verdict and loses the label. Keep the two in
+# sync — change the brief's routing block and change this.
+#   pass / pass_with_findings -> checked-pass  (the operator's merge gate)
+#   changes_requested / fail  -> resume        (worker's court; the PR also goes back to draft)
+#   blocked                   -> needs-input   (the operator's court)
+verdict_label() {
+  case "${1:-}" in
+    pass|pass_with_findings) echo "checked-pass" ;;
+    changes_requested|fail)  echo "resume" ;;
+    blocked)                 echo "needs-input" ;;
+    *)                       echo "" ;;
+  esac
+  return 0
+}
+
+# publish_recovered_verdict <verdict-file> <repo> <pr> [issue] [dispatched-at] — perform the
+# routing a checker that died before its last act never got to perform. Prints a one-line
+# note naming what it published (empty when there was nothing to publish).
+#
+# Three acts, matching briefs/checker-brief.md's routing block:
+#   1. the `**Checker verdict:` PR comment, so the round is countable by CHECKER_ROUND_LEADS
+#      and the findings reach the operator at all — on disk they are invisible;
+#   2. the verdict's label on the closing ISSUE (routing labels live on the issue, not the PR);
+#   3. for a worker-court verdict, flipping the PR back to draft. Not cosmetic: board-digest
+#      strands a ready PR whose issue carries `resume` in NEITHER bucket — awaiting_check
+#      excludes it on the label, and the resume bucket requires no open PR — so a label
+#      without the flip hands the work to nobody.
+#
+# ALL-OR-NOTHING, in that order (issue #63 round 2). The comment is the GATE: if the verdict
+# is not visibly published on the PR, the label is not applied and the PR is not flipped. The
+# failure this rules out is a PR sitting at the operator's merge gate labelled `checked-pass`
+# whose only visible checker comment says something else — a label with no record behind it is
+# more misleading than no recovery at all, because the merge gate is where a human acts on it.
+# A label that cannot be applied likewise suppresses the flip: the two are one routing act,
+# and half of it strands the PR in a state no board-digest bucket describes.
+#
+# IDEMPOTENT by reading state before each act, and GENERATION-AWARE about the comment: it is
+# suppressed only by a `**Checker verdict:` comment created AFTER this dispatch's
+# `dispatched <ts>` — i.e. one from THIS round. Matching any such comment of any vintage (the
+# original form of this check) silently dropped every round-2+ recovery, because a PR that has
+# been through a `changes_requested` round carries that comment permanently: the label was
+# applied while the new verdict was never published. With no timestamp to compare against, the
+# check degrades to the old generation-blind form — the conservative direction, since a
+# duplicate countable comment would over-count CHECKER_LIMIT. The label goes on only when
+# absent and the flip only when the PR is currently ready, so a re-run publishes nothing.
+#
+# FAILS SOFT and says so: a `gh` lookup that errors or won't parse leaves everything alone
+# rather than guessing. This runs unattended at cycle start, where a flaky network must
+# never invent a merge gate or bounce a PR. It also never touches a PR that is no longer
+# OPEN — a merged/closed PR's verdict is moot.
+publish_recovered_verdict() {
+  local vf="$1" repo="$2" pr="$3" issue="${4:-}" dispatched_at="${5:-}"
+  local v label pj rc=0 prstate labs body notes="" mine label_ok=0
+  v="$(verdict_of "$vf")"
+  if [ -z "$v" ]; then printf ''; return 0; fi
+  label="$(verdict_label "$v")"
+  if [ -z "$label" ]; then
+    echo "  ⚠ $vf carries an unrecognized verdict '$v' — nothing routed (see briefs/checker-brief.md)" >&2
+    printf ''; return 0
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "  ⚠ gh not on PATH — verdict '$v' for $repo#$pr NOT routed (label \`$label\` still unapplied)" >&2
+    printf ''; return 0
+  fi
+  pj="$(gh pr view "$pr" -R "$repo" --json isDraft,state,comments,closingIssuesReferences 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$pj" ]; then
+    echo "  ⚠ gh PR lookup failed for $repo#$pr — verdict '$v' NOT routed (label \`$label\` still unapplied)" >&2
+    printf ''; return 0
+  fi
+  prstate="$(printf '%s' "$pj" | jq -r '.state // empty' 2>/dev/null || true)"
+  if [ "$prstate" != "OPEN" ]; then
+    echo "  note: $repo#$pr is ${prstate:-unreadable}, not OPEN — verdict '$v' left unrouted (moot)" >&2
+    printf ''; return 0
+  fi
+  [ -n "$issue" ] || issue="$(jq -r '.issue // empty' "$vf" 2>/dev/null || true)"
+  [ -n "$issue" ] || issue="$(printf '%s' "$pj" | jq -r '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)"
+
+  # (1) the countable verdict comment — THE GATE for (2) and (3). `mine` counts only the
+  # verdict comments from THIS generation: `createdAt` and the ledger's `dispatched <ts>` are
+  # both `%FT%TZ` UTC, so a lexicographic `>` is a valid ordering. An empty timestamp makes
+  # the `select` unconditional, restoring the generation-blind form.
+  mine="$(printf '%s' "$pj" | jq -r --arg ts "$dispatched_at" '
+      [ .comments[]?
+        | select((.body // "") | startswith("**Checker verdict:"))
+        | select($ts == "" or ((.createdAt // "") > $ts)) ] | length' 2>/dev/null || true)"
+  case "$mine" in ''|*[!0-9]*) mine=0 ;; esac   # unparseable -> post it (never label silently)
+  if [ "$mine" -gt 0 ]; then
+    notes="a \`**Checker verdict:\` comment from this round is already on the PR"
+  else
+    body="**Checker verdict: $v**
+
+_Recovered from \`$(basename "$vf")\` by \`ledger-prune.sh\`: the checker session died
+before it could post this or apply its label, so the review below was written but never
+published (issue #63). The verdict JSON it wrote:_
+
+\`\`\`json
+$(cat "$vf" 2>/dev/null)
+\`\`\`"
+    if gh pr comment "$pr" -R "$repo" --body "$body" >/dev/null 2>&1; then
+      notes="posted the recovered verdict comment"
+    else
+      # The gate closed: publish nothing else. Next cycle's sweep reports the verdict as
+      # UNROUTED (its ledger line is gone by then), which is the honest state to be in.
+      echo "  ⚠ could not post the recovered verdict comment on $repo#$pr — all-or-nothing:" >&2
+      echo "    label \`$label\` NOT applied and the PR NOT flipped. Apply them by hand from $vf," >&2
+      echo "    or leave it for the unowned-verdict sweep to report on the next cycle." >&2
+      printf 'verdict %s NOT published on %s#%s: comment post failed; nothing else routed\n' "$v" "$repo" "$pr"
+      return 0
+    fi
+  fi
+
+  # (2) the label — only when the issue does not already carry it.
+  if [ -n "$issue" ]; then
+    labs="$(gh issue view "$issue" -R "$repo" --json labels 2>/dev/null \
+            | jq -r '.labels[].name' 2>/dev/null || true)"
+    # herestring, never `printf … | grep -q`: grep exits on match and hands the writer an
+    # EPIPE, which under `set -o pipefail` inverts the test (tests/lib/assert.sh header).
+    if grep -qxF -- "$label" <<<"$labs"; then
+      notes="$notes; label \`$label\` already on #$issue"; label_ok=1
+    elif gh issue edit "$issue" -R "$repo" --add-label "$label" >/dev/null 2>&1; then
+      notes="$notes; applied \`$label\` to #$issue"; label_ok=1
+    else
+      echo "  ⚠ could not apply \`$label\` to $repo#$issue — apply it by hand from $vf" >&2
+      notes="$notes; FAILED to apply \`$label\` to #$issue"
+    fi
+  else
+    echo "  ⚠ could not determine the closing issue for $repo#$pr — label \`$label\` NOT applied" >&2
+    notes="$notes; no closing issue found; \`$label\` unapplied"
+  fi
+
+  # (3) worker-court verdicts go back to draft (see the header — a label alone strands it),
+  # and only when the label itself landed (all-or-nothing: half a routing act strands it too).
+  if [ "$label" = "resume" ]; then
+    if [ "$label_ok" -ne 1 ]; then
+      notes="$notes; draft flip skipped (the label did not land)"
+    elif [ "$(printf '%s' "$pj" | jq -r '.isDraft' 2>/dev/null || true)" = "true" ]; then
+      notes="$notes; PR already draft"
+    elif gh pr ready "$pr" -R "$repo" --undo >/dev/null 2>&1; then
+      notes="$notes; flipped $repo#$pr back to draft"
+    else
+      echo "  ⚠ could not flip $repo#$pr back to draft — a ready PR labeled \`resume\` is dispatched to nobody" >&2
+      notes="$notes; FAILED to flip the PR back to draft"
+    fi
+  fi
+  printf 'published verdict %s: %s\n' "$v" "$notes"
+  return 0
 }
 
 # rotate_verdict_file <verdict-file> — move an existing checker verdict JSON aside to a
