@@ -91,9 +91,16 @@ field*; a filled conf exits 0, exports all five vars, and renders `{{OPERATOR_NA
 into a brief the way the launchers do); the `derailleur`/`dr` CLI dispatcher
 (`help`/unknown-command/sourced-lib routing, and the subtle symlink resolution back
 to this checkout); `watch-dispatch.sh` terminal-state classification (done /
-verdict-wins-over-status / dead-pid=unknown / live=pending / `incomplete-*` terminal
+a finalized checker reporting its verdict / a written verdict on a still-dispatched
+checker staying *pending* / dead-pid=unknown / live=pending / `incomplete-*` terminal
 with a re-dispatch hint / an `incomplete-waiting` checker reporting a written verdict
-*and* the live session, plus malformed/no-arg rejection); the `dispatch-common.sh`
+*and* the live session, plus malformed/no-arg rejection); its dispatch-identity and
+freshness guard (a previous dispatch's terminal ledger line and a verdict file that
+predates the dispatch are both refused; no line yet stays pending and times out as a
+loud `no-dispatch-record`; a dead pid still reports `unknown`; `@<pid>` resolves the
+line by identity — and a stubbed launch whose ledger append and verdict rotation are
+deliberately delayed, watched concurrently, fires exactly once on its own verdict);
+the `dispatch-common.sh`
 completion gate (`tmux_job_state`'s pane-dead liveness and `assert_finalized`'s
 per-role reason battery — including the "finished tmux session still counts as done"
 regression net, the no-false-`incomplete`-on-`gh`-failure guard, and the

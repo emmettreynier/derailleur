@@ -53,10 +53,12 @@ research work, from whatever repo this session is running in. Scope: `$ARGUMENTS
   the watch in that same turn — do not serialize launch → confirm → launch, and do
   NOT add a separate "did it launch?" step (the launcher's synchronous stdout is the
   confirmation). Then watch those exact item(s) to terminal state with no further
-  prompt: `Monitor` wraps `dr watch-dispatch` (both granted) — never monitor the
-  detached `launch-*` command itself. Follow the brief's "After you dispatch" and
-  "tmux-aware reconciliation" sections: poll local signals, report each outcome as it
-  lands, and never dispatch a checker into a worktree with a live tmux session.
+  prompt: `Monitor` wraps `dr watch-dispatch` (both granted), passing the
+  `<item>@<pid>` token each launcher prints (that pid is what makes a watch armed in
+  this same turn race-free) — never monitor the detached `launch-*` command itself.
+  Follow the brief's "After you dispatch" and "tmux-aware reconciliation" sections:
+  poll local signals, report each outcome as it lands, and never dispatch a checker
+  into a worktree with a live tmux session.
 - If a candidate is borderline or under-specified, dig in with `gh issue view <n>
   -R <owner/repo> --comments` before proposing; if it stays under-specified,
   recommend `needs-definition` rather than inventing a spec.

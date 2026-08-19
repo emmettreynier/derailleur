@@ -86,6 +86,8 @@
 set -euo pipefail
 
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# `LEDGER` is overridable so a scratch ledger can be pointed at without a sandbox ORCH
+# (the reproduction recipes in issue #66 use exactly that); it defaults to this checkout's.
 LEDGER="${LEDGER:-$ORCH/ledger.md}"
 INTERVAL=15
 DRY_RUN=0

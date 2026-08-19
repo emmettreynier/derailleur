@@ -77,7 +77,7 @@ assert_matches "$wd_out" 'demo#pr60 \(checker\) -> incomplete-noverdict \(re-dis
   "The ledger status is written after the session exits, so incomplete-* outranks the verdict file."
 assert_not_contains "$wd_out" "demo#pr60 (checker) -> pass" \
   "the stale verdict file does not mask the checker's incomplete status" \
-  "terminal_state must consult the status before the verdict file when the status is incomplete-*."
+  "item_state must consult the status before the verdict file when the status is incomplete-*."
 assert_not_contains "$wd_out" "demo#10 (worker) -> done (re-dispatch required)" \
   "a plain 'done' carries no re-dispatch hint" \
   "terminal_note must fire only for incomplete-* — see bin/watch-dispatch.sh."

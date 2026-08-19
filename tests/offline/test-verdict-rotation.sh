@@ -38,7 +38,7 @@ printf '{"verdict":"pass_with_findings","head":"round-1"}' >"$VF"
 rotate_verdict_file "$VF"
 assert_file_absent "$VF" \
   "rotation removes the canonical verdict path (a new generation starts clean)" \
-  "watch-dispatch.sh's terminal_state stats the canonical path before the ledger status — if it survives a dispatch, round 2 reports round 1's verdict instantly (issue #49)."
+  "watch-dispatch.sh reads the canonical path — if a verdict survives a dispatch, round 2 can report round 1's (issue #49; #66 added the mtime freshness check as the reader-side half)."
 assert_file_present "$PREV" \
   "rotation keeps the displaced verdict in a .prev.json slot" \
   "The rotation is deliberately a mv, not an rm — see rotate_verdict_file in bin/dispatch-common.sh."
