@@ -273,4 +273,9 @@ else
   disown 2>/dev/null || true
   write_ledger "$CHECKER_PID" "dispatched"
   echo "  pid $CHECKER_PID  (detached, own session; mutation + completion checks in the log)"
+  # `@<pid>` is the dispatch identity watch-dispatch.sh resolves the ledger line by, so a
+  # watch armed in this same turn can never report the previous round's verdict or status
+  # as this checker's (issue #66 — the verdict-file rotation above narrows that window,
+  # this closes it). Printed ready to copy.
+  echo "  watch: dr watch-dispatch ${REPO_SLUG}#pr${PR}@${CHECKER_PID}"
 fi
