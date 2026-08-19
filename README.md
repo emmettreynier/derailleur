@@ -119,9 +119,12 @@ absent); `ledger-prune.sh` dead-pid pruning, its
 reconcile-before-prune pass (a dead-pid `dispatched` checker with a complete verdict gets
 its label applied from the verdict file, a terminal status, and no duplicate label or
 comment on a re-run; with no verdict it reaches `incomplete-noverdict` and posts the
-countable checker comment; a live pid is left untouched; an unowned verdict JSON in
-`logs/` is reported only when its label never landed; and an entry pruned while still
-non-terminal names its log and whether a verdict file was found), plus the
+countable checker comment; a live pid is left untouched; a round-2 verdict is still
+published on a PR that already carries a round-1 verdict comment, while a comment the
+reconciler cannot post routes nothing at all — no label, no draft flip; an unowned verdict
+JSON in `logs/` is reported only when its label never landed, and the sweep's own local
+dead ends are named rather than swallowed; and an entry pruned while still non-terminal
+names its log and whether a verdict file was found), plus the
 split no-clean-finish escalation (trailing `**Worker incomplete: incomplete-waiting`
 comments count against the loose `WORKER_WAIT_LIMIT`; every `**Worker interrupted:` and
 every other incomplete reason — `incomplete-conflicting` included — against

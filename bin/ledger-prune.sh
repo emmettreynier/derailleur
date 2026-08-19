@@ -67,9 +67,11 @@ _slug_of_log() {
   return 0
 }
 
-# reconcile_entry <kind> <num> <repo> <branch> <log> <pid> <status>
+# reconcile_entry <kind> <num> <repo> <branch> <log> <pid> <status> <dispatched-at>
+# <dispatched-at> is the line's `dispatched <ts>`; publish_recovered_verdict needs it to tell
+# THIS round's verdict comment from a previous round's (issue #63 round 2).
 reconcile_entry() {
-  local kind="$1" num="$2" repo="$3" branch="$4" log="$5" pid="$6" status="$7"
+  local kind="$1" num="$2" repo="$3" branch="$4" log="$5" pid="$6" status="$7" dispatched_at="${8:-}"
   local slug wt wdir st vf v note
   echo "reconciling $kind $repo#$num — pid $pid dead, status still \`$status\` (log: $log)" >&2
 
@@ -110,7 +112,7 @@ reconcile_entry() {
   if [ "$kind" = "checker" ]; then
     v="$(verdict_of "$vf")"
     if [ -n "$v" ]; then
-      note="$(publish_recovered_verdict "$vf" "$repo" "$num" "")"
+      note="$(publish_recovered_verdict "$vf" "$repo" "$num" "" "$dispatched_at")"
       [ -n "$note" ] && echo "  $note" >&2
       return 0
     fi
@@ -130,7 +132,7 @@ reconcile_entry() {
 # alone. Python does the parse + the liveness call so the pid semantics match the prune
 # pass below EXACTLY — including PermissionError meaning "alive, another user's".
 reconcile_dead_dispatches() {
-  local targets kind num repo branch log pid status
+  local targets kind num repo branch log pid status dispatched_at
   targets="$(LEDGER="$LEDGER" python3 <<'RECON'
 import os, re
 for ln in open(os.environ["LEDGER"]).read().splitlines():
@@ -144,6 +146,7 @@ for ln in open(os.environ["LEDGER"]).read().splitlines():
     log    = fields[3] if len(fields) > 3 else ""
     pid    = (re.search(r"pid\s+(\S+)", ln) or [None, ""])[1] or ""
     status = (re.search(r"status\s+(\S+)", ln) or [None, ""])[1] or ""
+    disp   = (re.search(r"dispatched\s+(\S+)", ln) or [None, ""])[1] or ""
     # Terminal statuses are already finalized — nothing to redo.
     if status in ("done", "unknown") or status.startswith(("incomplete", "interrupted")):
         continue
@@ -162,15 +165,15 @@ for ln in open(os.environ["LEDGER"]).read().splitlines():
         continue                 # exists, owned by another user -> treat as alive
     if not repo or not log:
         continue                 # unparseable line: the prune pass warns about it
-    print("\t".join([kind, m.group(2), repo, branch, log, pid, status]))
+    print("\t".join([kind, m.group(2), repo, branch, log, pid, status, disp]))
 RECON
 )"
   [ -n "$targets" ] || return 0
   # The heredoc is on fd 3, not stdin: reconcile_entry shells out to git/gh, and a child
   # that reads stdin would eat the rest of the target list.
-  while IFS="$(printf '\t')" read -r kind num repo branch log pid status <&3; do
+  while IFS="$(printf '\t')" read -r kind num repo branch log pid status dispatched_at <&3; do
     [ -n "$kind" ] || continue
-    reconcile_entry "$kind" "$num" "$repo" "$branch" "$log" "$pid" "$status"
+    reconcile_entry "$kind" "$num" "$repo" "$branch" "$log" "$pid" "$status" "$dispatched_at"
   done 3<<TARGETS
 $targets
 TARGETS
@@ -196,6 +199,10 @@ TARGETS
 #   * the closing issue must NOT already carry the label the verdict routes to (i.e. the
 #     outcome never landed). A `gh` lookup that fails leaves it unreported — silence on an
 #     uncertain network, like the rest of this script.
+# Its own dead ends, though, are REPORTED rather than skipped (issue #63 round 2): no manifest
+# for the slug, no `gh` on PATH, and a JSON with no `issue` field are all permanent LOCAL
+# conditions that never resolve on a later run, so swallowing them would make a detectability
+# pass silent about precisely the files it understands least.
 # VERDICT_SWEEP_LIMIT bounds the `gh` calls; a truncated sweep says so rather than reading
 # as "checked everything".
 VERDICT_SWEEP_LIMIT="${VERDICT_SWEEP_LIMIT:-25}"
@@ -221,13 +228,29 @@ sweep_unowned_verdicts() {
       found=$((found + 1)); continue
     fi
     slug="${key%-pr-*}"; pr="${key##*-pr-}"
+    # The two LOCAL dead ends below are reported, not skipped: this pass exists so that an
+    # orphaned verdict is DETECTABLE, and neither condition ever resolves itself on a later
+    # run — a bare `continue` would make the sweep permanently silent about exactly the file
+    # it can least explain. (A failed/unparseable `gh` lookup further down stays silent by
+    # design — that is an uncertain network, which the next cycle re-reads.)
     repo="$(_manifest_field "$slug" repo)"
-    [ -n "$repo" ] || continue      # no manifest for this slug — not an onboarded project
-    command -v gh >/dev/null 2>&1 || continue
+    if [ -z "$repo" ]; then
+      echo "⚠ unowned verdict file $f: no manifest at projects/$slug.yml, so its repo is unknown" >&2
+      echo "    — cannot check whether \`$label\` landed. Onboard the slug or delete the file." >&2
+      found=$((found + 1)); continue
+    fi
+    if ! command -v gh >/dev/null 2>&1; then
+      echo "⚠ unowned verdict file $f ($repo#$pr, verdict \`$v\`): gh not on PATH — routing unverifiable" >&2
+      found=$((found + 1)); continue
+    fi
     prstate="$(gh pr view "$pr" -R "$repo" --json state 2>/dev/null | jq -r '.state // empty' 2>/dev/null || true)"
     [ "$prstate" = "OPEN" ] || continue
     issue="$(jq -r '.issue // empty' "$f" 2>/dev/null || true)"
-    [ -n "$issue" ] || continue
+    if [ -z "$issue" ]; then
+      echo "⚠ unowned verdict file $f: verdict \`$v\` on open $repo#$pr, but the JSON names no \`issue\`" >&2
+      echo "    — cannot check whether \`$label\` landed on the closing issue. Read the file and route by hand." >&2
+      found=$((found + 1)); continue
+    fi
     labs="$(gh issue view "$issue" -R "$repo" --json labels 2>/dev/null \
             | jq -r '.labels[].name' 2>/dev/null || true)"
     grep -qxF -- "$label" <<<"$labs" && continue      # the outcome landed — not orphaned

@@ -589,32 +589,44 @@ verdict_label() {
   return 0
 }
 
-# publish_recovered_verdict <verdict-file> <repo> <pr> [issue] — perform the routing a
-# checker that died before its last act never got to perform. Prints a one-line note
-# naming what it published (empty when there was nothing to publish).
+# publish_recovered_verdict <verdict-file> <repo> <pr> [issue] [dispatched-at] — perform the
+# routing a checker that died before its last act never got to perform. Prints a one-line
+# note naming what it published (empty when there was nothing to publish).
 #
 # Three acts, matching briefs/checker-brief.md's routing block:
-#   1. the verdict's label on the closing ISSUE (routing labels live on the issue, not the PR);
-#   2. the `**Checker verdict:` PR comment, so the round is countable by
-#      CHECKER_ROUND_LEADS and the findings reach the operator at all — on disk they are
-#      invisible;
+#   1. the `**Checker verdict:` PR comment, so the round is countable by CHECKER_ROUND_LEADS
+#      and the findings reach the operator at all — on disk they are invisible;
+#   2. the verdict's label on the closing ISSUE (routing labels live on the issue, not the PR);
 #   3. for a worker-court verdict, flipping the PR back to draft. Not cosmetic: board-digest
 #      strands a ready PR whose issue carries `resume` in NEITHER bucket — awaiting_check
 #      excludes it on the label, and the resume bucket requires no open PR — so a label
 #      without the flip hands the work to nobody.
 #
-# IDEMPOTENT by reading state before each act: the label only when absent, the comment only
-# when the PR carries no `**Checker verdict:` comment at all (the checker may well have
-# posted its own before dying), the flip only when the PR is currently ready. A second run
-# publishes nothing and posts nothing.
+# ALL-OR-NOTHING, in that order (issue #63 round 2). The comment is the GATE: if the verdict
+# is not visibly published on the PR, the label is not applied and the PR is not flipped. The
+# failure this rules out is a PR sitting at the operator's merge gate labelled `checked-pass`
+# whose only visible checker comment says something else — a label with no record behind it is
+# more misleading than no recovery at all, because the merge gate is where a human acts on it.
+# A label that cannot be applied likewise suppresses the flip: the two are one routing act,
+# and half of it strands the PR in a state no board-digest bucket describes.
+#
+# IDEMPOTENT by reading state before each act, and GENERATION-AWARE about the comment: it is
+# suppressed only by a `**Checker verdict:` comment created AFTER this dispatch's
+# `dispatched <ts>` — i.e. one from THIS round. Matching any such comment of any vintage (the
+# original form of this check) silently dropped every round-2+ recovery, because a PR that has
+# been through a `changes_requested` round carries that comment permanently: the label was
+# applied while the new verdict was never published. With no timestamp to compare against, the
+# check degrades to the old generation-blind form — the conservative direction, since a
+# duplicate countable comment would over-count CHECKER_LIMIT. The label goes on only when
+# absent and the flip only when the PR is currently ready, so a re-run publishes nothing.
 #
 # FAILS SOFT and says so: a `gh` lookup that errors or won't parse leaves everything alone
 # rather than guessing. This runs unattended at cycle start, where a flaky network must
 # never invent a merge gate or bounce a PR. It also never touches a PR that is no longer
 # OPEN — a merged/closed PR's verdict is moot.
 publish_recovered_verdict() {
-  local vf="$1" repo="$2" pr="$3" issue="${4:-}"
-  local v label pj rc=0 prstate labs body notes=""
+  local vf="$1" repo="$2" pr="$3" issue="${4:-}" dispatched_at="${5:-}"
+  local v label pj rc=0 prstate labs body notes="" mine label_ok=0
   v="$(verdict_of "$vf")"
   if [ -z "$v" ]; then printf ''; return 0; fi
   label="$(verdict_label "$v")"
@@ -639,28 +651,17 @@ publish_recovered_verdict() {
   [ -n "$issue" ] || issue="$(jq -r '.issue // empty' "$vf" 2>/dev/null || true)"
   [ -n "$issue" ] || issue="$(printf '%s' "$pj" | jq -r '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)"
 
-  # (1) the label — only when the issue does not already carry it.
-  if [ -n "$issue" ]; then
-    labs="$(gh issue view "$issue" -R "$repo" --json labels 2>/dev/null \
-            | jq -r '.labels[].name' 2>/dev/null || true)"
-    # herestring, never `printf … | grep -q`: grep exits on match and hands the writer an
-    # EPIPE, which under `set -o pipefail` inverts the test (tests/lib/assert.sh header).
-    if grep -qxF -- "$label" <<<"$labs"; then
-      notes="label \`$label\` already on #$issue"
-    elif gh issue edit "$issue" -R "$repo" --add-label "$label" >/dev/null 2>&1; then
-      notes="applied \`$label\` to #$issue"
-    else
-      echo "  ⚠ could not apply \`$label\` to $repo#$issue — apply it by hand from $vf" >&2
-      notes="FAILED to apply \`$label\` to #$issue"
-    fi
-  else
-    echo "  ⚠ could not determine the closing issue for $repo#$pr — label \`$label\` NOT applied" >&2
-    notes="no closing issue found; \`$label\` unapplied"
-  fi
-
-  # (2) the countable verdict comment — only when the checker posted none itself.
-  if printf '%s' "$pj" | jq -e '[.comments[].body | select(startswith("**Checker verdict:"))] | length > 0' >/dev/null 2>&1; then
-    notes="$notes; the checker's own verdict comment is already on the PR"
+  # (1) the countable verdict comment — THE GATE for (2) and (3). `mine` counts only the
+  # verdict comments from THIS generation: `createdAt` and the ledger's `dispatched <ts>` are
+  # both `%FT%TZ` UTC, so a lexicographic `>` is a valid ordering. An empty timestamp makes
+  # the `select` unconditional, restoring the generation-blind form.
+  mine="$(printf '%s' "$pj" | jq -r --arg ts "$dispatched_at" '
+      [ .comments[]?
+        | select((.body // "") | startswith("**Checker verdict:"))
+        | select($ts == "" or ((.createdAt // "") > $ts)) ] | length' 2>/dev/null || true)"
+  case "$mine" in ''|*[!0-9]*) mine=0 ;; esac   # unparseable -> post it (never label silently)
+  if [ "$mine" -gt 0 ]; then
+    notes="a \`**Checker verdict:\` comment from this round is already on the PR"
   else
     body="**Checker verdict: $v**
 
@@ -672,16 +673,43 @@ published (issue #63). The verdict JSON it wrote:_
 $(cat "$vf" 2>/dev/null)
 \`\`\`"
     if gh pr comment "$pr" -R "$repo" --body "$body" >/dev/null 2>&1; then
-      notes="$notes; posted the recovered verdict comment"
+      notes="posted the recovered verdict comment"
     else
-      echo "  ⚠ could not post the recovered verdict comment on $repo#$pr" >&2
-      notes="$notes; FAILED to post the recovered verdict comment"
+      # The gate closed: publish nothing else. Next cycle's sweep reports the verdict as
+      # UNROUTED (its ledger line is gone by then), which is the honest state to be in.
+      echo "  ⚠ could not post the recovered verdict comment on $repo#$pr — all-or-nothing:" >&2
+      echo "    label \`$label\` NOT applied and the PR NOT flipped. Apply them by hand from $vf," >&2
+      echo "    or leave it for the unowned-verdict sweep to report on the next cycle." >&2
+      printf 'verdict %s NOT published on %s#%s: comment post failed; nothing else routed\n' "$v" "$repo" "$pr"
+      return 0
     fi
   fi
 
-  # (3) worker-court verdicts go back to draft (see the header — a label alone strands it).
+  # (2) the label — only when the issue does not already carry it.
+  if [ -n "$issue" ]; then
+    labs="$(gh issue view "$issue" -R "$repo" --json labels 2>/dev/null \
+            | jq -r '.labels[].name' 2>/dev/null || true)"
+    # herestring, never `printf … | grep -q`: grep exits on match and hands the writer an
+    # EPIPE, which under `set -o pipefail` inverts the test (tests/lib/assert.sh header).
+    if grep -qxF -- "$label" <<<"$labs"; then
+      notes="$notes; label \`$label\` already on #$issue"; label_ok=1
+    elif gh issue edit "$issue" -R "$repo" --add-label "$label" >/dev/null 2>&1; then
+      notes="$notes; applied \`$label\` to #$issue"; label_ok=1
+    else
+      echo "  ⚠ could not apply \`$label\` to $repo#$issue — apply it by hand from $vf" >&2
+      notes="$notes; FAILED to apply \`$label\` to #$issue"
+    fi
+  else
+    echo "  ⚠ could not determine the closing issue for $repo#$pr — label \`$label\` NOT applied" >&2
+    notes="$notes; no closing issue found; \`$label\` unapplied"
+  fi
+
+  # (3) worker-court verdicts go back to draft (see the header — a label alone strands it),
+  # and only when the label itself landed (all-or-nothing: half a routing act strands it too).
   if [ "$label" = "resume" ]; then
-    if [ "$(printf '%s' "$pj" | jq -r '.isDraft' 2>/dev/null || true)" = "true" ]; then
+    if [ "$label_ok" -ne 1 ]; then
+      notes="$notes; draft flip skipped (the label did not land)"
+    elif [ "$(printf '%s' "$pj" | jq -r '.isDraft' 2>/dev/null || true)" = "true" ]; then
       notes="$notes; PR already draft"
     elif gh pr ready "$pr" -R "$repo" --undo >/dev/null 2>&1; then
       notes="$notes; flipped $repo#$pr back to draft"

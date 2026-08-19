@@ -19,6 +19,13 @@
 #       landed, and stays quiet when it did
 #   (e) an entry pruned while STILL non-terminal (a `-` pid the reconciler cannot judge)
 #       names itself, its log, and whether a verdict file was found
+#   (f) CROSS-GENERATION (issue #63 round 2): a PR that already carries a ROUND-1
+#       `**Checker verdict:` comment still gets round 2's verdict published — deliberately
+#       WITHOUT clearing the fake PR's comments, since clearing them is what hid this
+#   (g) the all-or-nothing gate: a verdict comment that cannot be posted routes NOTHING —
+#       no label, no draft flip
+#   (h) the sweep's locally-unresolvable cases (no `issue` field in the JSON, no manifest for
+#       the slug) are reported by name, not swallowed
 set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$TEST_DIR/../lib/assert.sh"
@@ -84,19 +91,32 @@ json_pr() {   # $1 = fields requested
   BODYFILE="$COMMENTS" DRAFTFILE="$DRAFT" PRSTATE="${FAKE_PR_STATE:-OPEN}" python3 <<'PY'
 import json, os
 try:
-    bodies = [b for b in open(os.environ["BODYFILE"]).read().split("\x00") if b.strip()]
+    recs = [r for r in open(os.environ["BODYFILE"]).read().split("\x00") if r.strip()]
 except OSError:
-    bodies = []
+    recs = []
+comments = []
+for r in recs:                       # each record is `createdAt \x1f body`
+    ts, sep, body = r.partition("\x1f")
+    if not sep:
+        ts, body = "1970-01-01T00:00:00Z", ts
+    comments.append({"createdAt": ts, "body": body})
 print(json.dumps({
     "state": os.environ["PRSTATE"],
     "isDraft": os.path.exists(os.environ["DRAFTFILE"]),
-    "comments": [{"body": b} for b in bodies],
+    "comments": comments,
     "closingIssuesReferences": [{"number": 48}],
 }))
 PY
 }
 case "$1 ${2:-}" in
-  "pr comment")     printf '%s\x00' "$body" >>"$COMMENTS"; exit 0 ;;
+  "pr comment")
+    # FAKE_COMMENT_FAIL makes the post fail, so the all-or-nothing gate can be tested.
+    if [ -n "${FAKE_COMMENT_FAIL:-}" ]; then exit 1; fi
+    # Records are `createdAt \x1f body`: the generation check compares createdAt against the
+    # ledger line's `dispatched <ts>`, so a fake comment needs a vintage. FAKE_COMMENT_TS
+    # defaults to AFTER the fixture's dispatch, i.e. "this round".
+    printf '%s\x1f%s\x00' "${FAKE_COMMENT_TS:-2026-08-04T19:00:00Z}" "$body" >>"$COMMENTS"
+    exit 0 ;;
   "issue comment")  exit 0 ;;
   "issue edit")     exit 0 ;;
   "pr ready")       : >"$DRAFT"; exit 0 ;;
@@ -139,6 +159,10 @@ write_verdict() {          # $1 = verdict token
 JSON
 }
 run_prune() { LEDGER="$LED" "$LP" 2>&1; }
+seed_pr_comment() {        # $1 = createdAt, $2 = body — a comment of a chosen vintage
+  printf '%s\x1f%s\x00' "$1" "$2" >>"$GH_STATE/pr-comments"
+}
+n_calls() { grep -c -- "$1" "$GH_CALLS" || true; }
 reset_github() { : >"$GH_CALLS"; rm -f "$GH_STATE/labels" "$GH_STATE/pr-comments" "$GH_STATE/draft"; }
 
 # ── (a) verdict complete: the review is recovered, not thrown away ────────────
@@ -293,3 +317,99 @@ assert_contains "$out_fg" "$WORKER_LOG" \
 assert_contains "$out_fg" "verdict file absent" \
   "the warning reports whether a verdict file was found" \
   "Acceptance criterion: the warning names the log AND the verdict-file state."
+
+# ── (f) cross-generation: a round-1 comment must not suppress round 2 ────────
+# The failure this pins (issue #63 round 2): the comment-idempotence check matched ANY
+# `**Checker verdict:` comment of ANY vintage, and a PR that has been through a
+# changes_requested round carries one permanently. So a round-2 checker that wrote a
+# complete `pass` verdict and then died had its LABEL applied while its verdict was never
+# published — the PR reached the operator's merge gate as `checked-pass` with nothing but
+# round 1's `changes_requested` comment visible on it, and the round was under-counted.
+#
+# Deliberately does NOT clear $GH_STATE/pr-comments: the round-1 comment stays on the fake
+# PR across the whole case, which is exactly the state the earlier cases reset away.
+: >"$GH_CALLS"; rm -f "$GH_STATE/labels" "$GH_STATE/draft"
+: >"$GH_STATE/pr-comments"
+seed_pr_comment "2026-08-01T12:00:00Z" "**Checker verdict: changes_requested**
+
+round 1 said changes. This comment is OLDER than the round-2 dispatch below."
+write_verdict pass                                   # round 2 completed, then was killed
+write_checker_ledger "$DEAD_PID"                     # dispatched 2026-08-04T18:34:34Z
+out_gen="$(run_prune)"
+
+assert_contains "$(cat "$GH_STATE/pr-comments")" "**Checker verdict: pass**" \
+  "a round-2 verdict is published even though a round-1 verdict comment is on the PR" \
+  "The comment check must be generation-aware: only a comment newer than this dispatch counts."
+assert_eq "1" "$(n_calls '^pr comment')" \
+  "exactly one comment is posted for the recovered round-2 verdict" \
+  "One recovered verdict comment per dispatch — the stale round-1 comment must not suppress it."
+assert_contains "$(cat "$GH_CALLS")" "--add-label checked-pass" \
+  "the round-2 label is applied alongside its published verdict" \
+  "Label and record land together — a checked-pass with no current verdict comment is the bug."
+assert_not_contains "$out_gen" "already on the PR" \
+  "the reconciler does not claim the verdict comment was already there" \
+  "Round 1's comment is a different generation; reporting it as 'already published' is the defect."
+
+# …and it is still idempotent: the comment it just posted IS from this generation, so a
+# second reconcile against that state publishes nothing. Comments are NOT cleared here.
+: >"$GH_CALLS"
+write_checker_ledger "$DEAD_PID"
+out_gen2="$(run_prune)"
+assert_eq "0" "$(n_calls '^pr comment')" \
+  "a second reconcile posts no comment (its own is now from this generation)" \
+  "Generation-awareness must not cost idempotence — the recovered comment is newer than the dispatch."
+assert_eq "0" "$(n_calls '--add-label')" \
+  "a second reconcile applies no label" \
+  "Idempotence, as in case (a)."
+assert_contains "$out_gen2" "from this round is already on the PR" \
+  "the second run says the verdict comment is already there for THIS round" \
+  "A no-op reconcile must be legible, and must name the generation it checked."
+
+# ── (g) all-or-nothing: no published verdict -> no label, no flip ────────────
+# A label at the operator's merge gate with no visible verdict behind it is worse than no
+# recovery at all, so the comment is the gate for the other two acts.
+reset_github
+write_verdict pass
+write_checker_ledger "$DEAD_PID"
+out_gate="$(FAKE_COMMENT_FAIL=1 run_prune)"
+assert_eq "0" "$(n_calls '--add-label')" \
+  "a verdict comment that cannot be posted applies no label" \
+  "All-or-nothing (issue #63 round 2): the PR must never be labelled with no record behind it."
+assert_contains "$out_gate" "NOT published" \
+  "the failure to publish is reported" \
+  "An unrouted verdict that says nothing is the original #63 hole."
+assert_contains "$out_gate" "NOT applied and the PR NOT flipped" \
+  "the note spells out that nothing else was routed" \
+  "The operator reading the cycle log has to know the recovery aborted, not half-landed."
+
+reset_github
+write_verdict changes_requested
+write_checker_ledger "$DEAD_PID"
+out_gate_cr="$(FAKE_COMMENT_FAIL=1 run_prune)"
+assert_eq "0" "$(n_calls 'pr ready 64')" \
+  "a verdict comment that cannot be posted does not flip the PR to draft" \
+  "The draft flip is part of the same routing act — half of it strands the PR."
+
+# ── (h) the sweep names what it cannot resolve locally ───────────────────────
+# Both conditions below are PERMANENT local ones: they never resolve on a later run, so a
+# bare `continue` made a pass whose whole job is detectability silent about them.
+reset_github
+: >"$LED"
+cat >"$VERDICT" <<'JSON'
+{"pr": 64, "verdict": "pass", "findings": [], "failure_class": "none"}
+JSON
+out_noissue="$(run_prune)"
+assert_contains "$out_noissue" "the JSON names no \`issue\`" \
+  "a verdict JSON with no issue field is reported by name" \
+  "Without the issue there is no label to check — that is a finding, not a reason to go quiet."
+assert_contains "$out_noissue" "$(basename "$VERDICT")" \
+  "the note names the verdict file" \
+  "Acceptance criterion (round 2): name the file instead of a bare continue."
+
+reset_github
+mv "$VERDICT" "$SB/logs/nosuchslug-pr-7-verdict.json"
+out_noman="$(run_prune)"
+assert_contains "$out_noman" "no manifest at projects/nosuchslug.yml" \
+  "a verdict whose slug has no manifest is reported by name" \
+  "An unonboarded slug is permanent — the file will never be checkable, so say so once."
+rm -f "$SB/logs/nosuchslug-pr-7-verdict.json"
