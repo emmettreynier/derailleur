@@ -265,4 +265,9 @@ else
   disown 2>/dev/null || true
   write_ledger "$WORKER_PID" "dispatched"
   echo "  pid $WORKER_PID (detached, own session)"
+  # The pid IS the dispatch's identity for watch-dispatch.sh: passed as `@<pid>` it
+  # resolves the ledger line by pid, so a watch armed in this same turn can never read
+  # a PREVIOUS dispatch of this issue as this one's state (issue #66). Printed ready to
+  # copy so the orchestrator never has to reconstruct the token.
+  echo "  watch: dr watch-dispatch ${REPO_SLUG}#${ISSUE}@${WORKER_PID}"
 fi

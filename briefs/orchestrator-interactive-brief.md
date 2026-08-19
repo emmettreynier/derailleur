@@ -162,22 +162,59 @@ handle to `wait` on), but each leaves a trail the launcher updates on exit: a
 (`ledger.md`/`logs/` live at the derailleur checkout path in your session context.)
 
 Invoke the script by that checkout's absolute path (or `dr watch-dispatch`),
-passing one slug-qualified token per item you dispatched this session:
+passing one slug-qualified token per item you dispatched this session — **with the
+pid the launcher just printed**:
 
-- worker: `<slug>#<issue>`  (e.g. `derailleur#26`)
-- checker: `<slug>#pr<n>`   (e.g. `derailleur#pr30`)
+- worker: `<slug>#<issue>@<pid>`  (e.g. `derailleur#26@34061`)
+- checker: `<slug>#pr<n>@<pid>`   (e.g. `derailleur#pr30@55448`)
+
+Each launcher prints that exact token, ready to copy, on the line after the pid:
+
+    pid 34061 (detached, own session)
+    watch: dr watch-dispatch derailleur#26@34061
+
+**Use it.** The pid is the dispatch's identity, and it is what makes arming the watch
+in the same turn as the launch race-free. Without it the script falls back to a
+timestamp floor (its own start, or `--since <ts>`), which is sound but weaker.
 
 It prints **one line per item the instant it goes terminal** and exits once every
 watched item is terminal — no cap, no time limit. It fires on the interrupt/crash
 statuses (`interrupted-*`, `unknown`, and a dead-but-unfinalized pid) exactly as on
-`done` / a written verdict, so **a crashed or interrupted dispatch is never watched
-in silence** — that guarantee is in the script, not something you must remember.
+`done`, so **a crashed or interrupted dispatch is never watched in silence** — that
+guarantee is in the script, not something you must remember.
+
+**What the line you get is now guaranteed to describe (issue #66).** Both signals the
+watch reads outlive the dispatch that wrote them — `ledger.md` is append-only and the
+verdict file is one fixed path per (slug, PR) — so a watch armed in the same turn as a
+launch used to report the **previous** dispatch's state within one poll (a worker
+called finished while still running; a superseded `changes_requested` reported at
+length when the real verdict was `pass`). The script now refuses evidence older than
+the dispatch it was asked to watch, so you may report its per-item line as this
+dispatch's outcome:
+
+- a ledger line is only read as this dispatch's when the pid matches (or, with no pid,
+  its `dispatched` timestamp is at/after the floor);
+- a verdict file counts only when its mtime is at/after that line's own dispatch time;
+- **no line for this dispatch yet is not terminal** — the item stays pending rather
+  than resolving off the last run, bounded by `--arm-timeout` (180s), after which it
+  says `no-dispatch-record`. Treat that as "the launch did not record itself": check
+  `ledger.md` and the launcher's output, don't re-dispatch blind;
+- **a written verdict is not a finish line.** A checker fires only when its ledger
+  status goes terminal (or its pid dies, still `unknown`). Observed on PR #67: the
+  verdict JSON landed and the old watch reported `-> pass` while the checker was still
+  alive and the `checked-pass` label did not land for another ~7 minutes. The verdict
+  is still what the line *says* — this changed *when* it fires.
+
+That is about the *dispatch*, not about GitHub: keep resolving the authoritative
+GitHub-side state (label applied? PR ready?) with the single `board-digest.sh` /
+`gh pr view` call per terminal event, below. Never tell the operator a label exists
+because the watch named a verdict.
 
 **Prefer `Monitor` (non-blocking) if it is in your toolset.** Wrap the script in one
 persistent `Monitor` so its per-item lines stream to you as notifications while you
 **stay responsive to the operator**:
 
-    Monitor: dr watch-dispatch derailleur#26 derailleur#pr30
+    Monitor: dr watch-dispatch derailleur#26@34061 derailleur#pr30@55448
 
 Set `persistent: true` (a worker can outlast the default timeout); the script polls
 about every 15s (tune with `--interval N`) and exits itself once all items are
@@ -208,6 +245,9 @@ per event — never per tick:
   stranded commits and commented on the issue); a redispatch resumes it.
 - any `incomplete-*` → the session exited **without finalizing** (see below); say so
   plainly and treat it as the worker's court, not as a finish.
+- `no-dispatch-record` / `record-gone` → not an outcome at all: no ledger line for the
+  dispatch you armed the watch on. Say so plainly; check the launcher output and
+  `ledger.md` before doing anything else.
 
 ## tmux-aware reconciliation — read the mechanical signals first
 

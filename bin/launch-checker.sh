@@ -244,10 +244,13 @@ write_ledger() {  # $1 = pid, $2 = status
 # the detached new-session body can call it too; here we pass the baseline explicitly.
 
 # Clear the canonical verdict path for this new generation (issue #49). On a RE-dispatch
-# the previous round's verdict is still sitting there, and watch-dispatch.sh's
-# terminal_state stats it before the ledger status — so the new checker was reported
-# terminal within seconds off a stale verdict, and a checker that crashed before its first
-# write was reported as a clean pass instead of surfacing the crash. Rotated to one
+# the previous round's verdict is still sitting there, and watch-dispatch.sh read it as
+# this dispatch's — so the new checker was reported terminal within seconds off a stale
+# verdict, and a checker that crashed before its first write was reported as a clean pass
+# instead of surfacing the crash. (Issue #66 hardened the READER too: `item_state` now
+# requires the verdict's mtime to be at/after this dispatch's own ledger timestamp. This
+# rotation still matters — it is what keeps a fresh checker's crash visible — but the two
+# are independent, so neither leans on the other.) Rotated to one
 # `.prev.json` slot rather than `rm`'d: a re-dispatch already overwrites in place today, so
 # moving keeps one MORE local generation (the one that matters when a fresh checker dies
 # before writing) at no risk of unbounded growth — the PR comment is the durable full copy.
@@ -273,4 +276,9 @@ else
   disown 2>/dev/null || true
   write_ledger "$CHECKER_PID" "dispatched"
   echo "  pid $CHECKER_PID  (detached, own session; mutation + completion checks in the log)"
+  # `@<pid>` is the dispatch identity watch-dispatch.sh resolves the ledger line by, so a
+  # watch armed in this same turn can never report the previous round's verdict or status
+  # as this checker's (issue #66 — the verdict-file rotation above narrows that window,
+  # this closes it). Printed ready to copy.
+  echo "  watch: dr watch-dispatch ${REPO_SLUG}#pr${PR}@${CHECKER_PID}"
 fi

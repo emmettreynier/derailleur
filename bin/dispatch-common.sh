@@ -730,13 +730,15 @@ $(cat "$vf" 2>/dev/null)
 #
 # WHY IT EXISTS (issue #49). The verdict path is fixed per (slug, PR) with no round or
 # timestamp component, and nothing ever removed it, so on a RE-dispatch the previous
-# round's verdict already sat at the canonical path from tick one. watch-dispatch.sh's
-# terminal_state stats that file before consulting the ledger status, so a round-2 checker
-# was reported terminal within seconds off a stale verdict on a possibly-many-commits-old
-# head — and, worse, a round-2 checker that died before writing anything was reported as a
-# clean verdict, so the crash was never surfaced at all. Clearing the path at dispatch is
-# what restores the briefs' promise that "a crashed or interrupted dispatch is never
-# watched in silence" for rounds 2+.
+# round's verdict already sat at the canonical path from tick one. watch-dispatch.sh read
+# that file as this dispatch's news, so a round-2 checker was reported terminal within
+# seconds off a stale verdict on a possibly-many-commits-old head — and, worse, a round-2
+# checker that died before writing anything was reported as a clean verdict, so the crash
+# was never surfaced at all. Clearing the path at dispatch is what restores the briefs'
+# promise that "a crashed or interrupted dispatch is never watched in silence" for rounds
+# 2+. (Issue #66 added the reader-side half: watch-dispatch.sh now also requires the
+# verdict's mtime to be at/after the dispatch's own ledger timestamp, which catches the
+# window between this rotation and a watch armed in the same turn as the launcher.)
 #
 # WHY A ROTATION AND NOT AN `rm`. A re-dispatched checker already overwrites its
 # predecessor in place, so no verdict history survives across rounds today; moving instead
