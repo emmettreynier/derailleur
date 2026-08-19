@@ -17,9 +17,12 @@ sandbox_copy_script "$SB" watch-dispatch
 WATCH="$SB/bin/watch-dispatch.sh"
 
 # Fixtures ($$ = this live shell): a done worker (status flip); a checker still
-# 'dispatched' but WITH a written verdict (verdict must win over status); a worker
-# whose pid is dead while status never finalized (=> unknown); and a genuinely live
-# dispatched worker (=> pending, must NOT be terminal).
+# 'dispatched' but WITH a written verdict (=> PENDING — a written verdict is this
+# dispatch's news but not a finish line, since the comment/label/PR flip are still
+# ahead of it; issue #66 addendum, and see tests/offline/test-watch-freshness.sh); a
+# FINALIZED checker whose verdict is what gets reported; a worker whose pid is dead
+# while status never finalized (=> unknown); and a genuinely live dispatched worker
+# (=> pending, must NOT be terminal).
 #
 # Plus (issue #40) an `incomplete-waiting` worker — terminal, but the work isn't
 # finished, so it must carry the re-dispatch hint — and an `incomplete-noverdict`
@@ -33,6 +36,7 @@ WATCH="$SB/bin/watch-dispatch.sh"
 cat >"$SB/ledger.md" <<LEDGER
 - #10 | owner/demo | issue-10 | $SB/logs/demo-issue-10.log | pid 1 | dispatched 2026-01-01T00:00:00Z | status done
 - check pr#20 | owner/demo | issue-10 | $SB/logs/demo-pr-20.log | pid $$ | dispatched 2026-01-01T00:00:00Z | status dispatched
+- check pr#21 | owner/demo | issue-10 | $SB/logs/demo-pr-21.log | pid $$ | dispatched 2026-01-01T00:00:00Z | status done
 - #30 | owner/demo | issue-30 | $SB/logs/demo-issue-30.log | pid 99999999 | dispatched 2026-01-01T00:00:00Z | status dispatched
 - #40 | owner/demo | issue-40 | $SB/logs/demo-issue-40.log | pid $$ | dispatched 2026-01-01T00:00:00Z | status dispatched
 - #50 | owner/demo | issue-50 | $SB/logs/demo-issue-50.log | pid 1 | dispatched 2026-01-01T00:00:00Z | status incomplete-waiting
@@ -42,20 +46,25 @@ cat >"$SB/ledger.md" <<LEDGER
 - check pr#90 | owner/demo | issue-50 | $SB/logs/demo-pr-90.log | pid 1 | dispatched 2026-01-01T00:00:00Z | status incomplete-waiting
 LEDGER
 printf '{"verdict":"checked-pass"}\n'       >"$SB/logs/demo-pr-20-verdict.json"
+printf '{"verdict":"checked-pass"}\n'       >"$SB/logs/demo-pr-21-verdict.json"
 printf '{"verdict":"pass"}\n'               >"$SB/logs/demo-pr-60-verdict.json"
 printf '{"verdict":"pass_with_findings"}\n' >"$SB/logs/demo-pr-70-verdict.json"
 # pr#80: no verdict file at all.  pr#90: a truncated/unparseable one.
 printf '{"verdict": "pass' >"$SB/logs/demo-pr-90-verdict.json"
 
 rc=0
-wd_out="$("$WATCH" --dry-run demo#10 demo#pr20 demo#30 demo#40 demo#50 demo#pr60 \
+wd_out="$("$WATCH" --dry-run demo#10 demo#pr20 demo#pr21 demo#30 demo#40 demo#50 demo#pr60 \
             demo#pr70 demo#pr80 demo#pr90 2>&1)" || rc=$?
 assert_rc 0 "$rc" "watch-dispatch --dry-run exits 0 on a valid fixture" \
   "The script should classify each item and exit 0 in --dry-run; see bin/watch-dispatch.sh."
 assert_matches "$wd_out" 'demo#10 \(worker\) -> done' "status=done worker classified 'done'" \
   "Ledger status-flip detection is broken in bin/watch-dispatch.sh."
-assert_matches "$wd_out" 'demo#pr20 \(checker\) -> checked-pass' "checker verdict JSON wins over still-dispatched status" \
-  "Verdict-file detection (jq .verdict) is broken, or it lost to the still-dispatched status."
+assert_matches "$wd_out" 'demo#pr20 \(checker\) -> pending \(verdict checked-pass written; dispatch not finalized yet)' \
+  "a written verdict on a still-dispatched checker is PENDING, and names the verdict" \
+  "A verdict file is not a finish line: the label/comment/PR flip are still ahead of it (issue #66 addendum)."
+assert_matches "$wd_out" 'demo#pr21 \(checker\) -> checked-pass' \
+  "a FINALIZED checker reports its verdict as the outcome" \
+  "Verdict-file detection (jq .verdict) is broken, or a terminal status did not report the verdict."
 assert_matches "$wd_out" 'demo#30 \(worker\) -> unknown' "dead-but-unfinalized pid classified 'unknown'" \
   "The silence-is-not-success guard (pid liveness) is broken in bin/watch-dispatch.sh."
 assert_matches "$wd_out" 'demo#40 \(worker\) -> pending' "live, still-dispatched worker classified 'pending'" \

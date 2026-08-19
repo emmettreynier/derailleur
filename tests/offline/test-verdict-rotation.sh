@@ -123,9 +123,13 @@ assert_contains "$dry_out" "verdict file" \
 # --- the fix must not have leaked into watch-dispatch.sh ----------------------------
 # The issue's precedence non-goal: watch-dispatch keeps reading ONLY the canonical path.
 # A `.prev` reference there would mean the stale verdict found a new way back in.
-assert_not_contains "$(cat "$REPO_ROOT/bin/watch-dispatch.sh")" '.prev' \
+# Comment lines are stripped first: since issue #66 the watcher's header explains WHY the
+# rotated slot is invisible to it (a moved file keeps its mtime, so the freshness check
+# would read it as this dispatch's news if it ever looked). Naming it in prose is fine —
+# opening it is not, and that is what this asserts.
+assert_not_contains "$(grep -v '^[[:space:]]*#' "$REPO_ROOT/bin/watch-dispatch.sh")" '.prev' \
   "watch-dispatch.sh never reads the .prev.json slot" \
-  "The rotated file is deliberately invisible to the watcher — its verdict-file-wins precedence stays exactly as-is (issue #49 non-goals)."
+  "The rotated file is deliberately invisible to the watcher — it must never appear in a path the script stats or opens (issue #49 non-goals)."
 assert_contains "$(cat "$REPO_ROOT/bin/launch-checker.sh")" 'rotate_verdict_file "$VERDICT_FILE"' \
   "launch-checker.sh calls the rotation on the real dispatch path" \
   "Both the detached and --foreground paths are covered by the single call before the dispatch branch."
