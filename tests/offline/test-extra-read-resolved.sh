@@ -183,6 +183,45 @@ for role in worker checker; do
 done
 
 # ===================================================================================
+# NO TRAILING NEWLINE — the last line of a manifest is a list entry and the file does
+# not end in `\n`. The block matcher repeats a `\n`-terminated line, so without an
+# explicit tail for the un-terminated final line that entry is silently dropped: a
+# read tree absent from scope, an output_paths entry missing from the brief, or — the
+# one that matters — a critical_paths entry the #43 bootstrap raw-link gate then stops
+# gating. Editors usually add the newline, which is exactly why this needs a net
+# rather than a convention. (The narrower pre-#74 pattern's `\n?` handled this; the
+# widening that bought comment/blank-line tolerance regressed it. Checker finding W1.)
+# ===================================================================================
+write_manifest "$SB/projects/nonl.yml" "" "$X1"
+# Re-emit the same manifest with the final list entry LAST and no terminating newline.
+{
+  # Drop the original block (it sits before raw_paths) so the re-emitted one below is
+  # the only extra_read_resolved key in the file, not a shadowed duplicate.
+  LC_ALL=C sed -e '/^extra_read_resolved:/,$d' "$SB/projects/nonl.yml"
+  echo "raw_paths:"
+  echo "  - ."
+  echo "output_paths:"
+  echo "  - data/results/"
+  echo "extra_read_resolved:"
+  printf '  - %s' "$X1"          # no trailing newline, deliberately
+} >"$SB/projects/nonl2.yml"
+# `$(...)` strips trailing newlines, so a file that DOES end in one yields the empty
+# string here and a file that does not yields its final byte — hence assert_ne "".
+assert_ne "" "$(tail -c 1 "$SB/projects/nonl2.yml")" \
+  "fixture: the no-trailing-newline manifest really has none" \
+  "If the fixture ends in a newline the assertions below pass vacuously."
+
+for role in worker checker; do
+  assert_contains "$(add_dirs "$role" nonl2)" "$X1" \
+    "manifest with NO trailing newline: the final list entry still reaches $role scope" \
+    "A list entry on an un-terminated final line must not be dropped — it is silent in all three consumers of yml_list (critical_paths/#43 gate, output_paths, extra_read_resolved)."
+done
+# The same file, parsed for a key whose block is NOT last, must be unaffected.
+assert_eq "$(add_dirs worker nonl)" "$(add_dirs worker nonl2)" \
+  "no-trailing-newline manifest yields the same vector as the newline-terminated one" \
+  "The tail added for the un-terminated case must not change parsing of a normal manifest."
+
+# ===================================================================================
 # READ SCOPE ONLY — the key must never become a write carveout. host/hooks/raw-data-guard.py
 # does not read it at all, and this is the assertion that keeps it that way.
 # ===================================================================================

@@ -78,11 +78,15 @@ expand() { eval echo "$1"; }   # ~ and $VAR expansion for path fields
 # Pass $'\n' to get ONE ENTRY PER LINE, which is what a list of PATHS needs: a manifest
 # path can contain spaces (distance-decay-est's "06 Raw_data"), so a comma-joined string
 # cannot be re-split into an array safely. Blank lines and whole-line comments inside the
-# block are tolerated; a trailing `#` comment on an entry is stripped, matching yml().
+# block are tolerated; a trailing `#` comment on an entry is stripped, matching yml();
+# and a final entry at EOF with no trailing newline is still read (issue #74, W1).
 yml_list() { python3 - "$MANIFEST" "$1" "${2-, }" <<'PY'
 import re, sys
 text = open(sys.argv[1]).read()
-m = re.search(rf'^{sys.argv[2]}:\s*(?:#.*)?\n((?:[ \t]*(?:-.*|#.*)?\n)*)', text, re.M)
+# Every repetition needs its own \n, so a final entry at EOF with NO trailing
+# newline needs the optional tail below (the pre-#74 pattern's `\n?` cannot be
+# restored instead — that makes the repetition zero-width and it matches nothing).
+m = re.search(rf'^{sys.argv[2]}:\s*(?:#.*)?\n((?:[ \t]*(?:-.*|#.*)?\n)*(?:[ \t]*-.*)?)', text, re.M)
 out = []
 if m:
     for line in m.group(1).splitlines():
