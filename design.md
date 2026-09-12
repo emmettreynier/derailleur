@@ -158,7 +158,7 @@ Three properties are load-bearing. **Idempotent, and generation-aware:** every a
 
 Workers run unattended (no human to approve prompts), so guardrails are **defense in depth** — only the first layer trusts the model to behave:
 
-**Layer 1 — OS:** `raw/` is **read-only** (perms / read-only symlink) — workers read `raw/`, write only to `processed/`/`out/` in the worktree; `--add-dir` scopes filesystem reach to just the worktree + data path. (For *dropbox-native* repos that can't be chmod'd without breaking coauthor scripts, this protection is delivered by the Layer-2 deny-hook over the manifest's `raw_paths` instead — see Portability.)
+**Layer 1 — OS:** `raw/` is **read-only** (perms / read-only symlink) — workers read `raw/`, write only to `processed/`/`out/` in the worktree; `--add-dir` scopes filesystem reach to just the worktree + data path. That scope is assembled from the manifest and nothing else: `raw_resolved` (one tree), plus the optional `derived_resolved`, plus the optional list-valued **`extra_read_resolved`** — additional read-only input trees for a repo that has more than one, so a narrow `raw_resolved` never has to be widened to expose a second (issue #74). That key grants read scope *only*: it adds no Layer-2 write carveout, and because Layer 1 is what actually gates reads of confidential data, it must never name a restricted tree. (For *dropbox-native* repos that can't be chmod'd without breaking coauthor scripts, this protection is delivered by the Layer-2 deny-hook over the manifest's `raw_paths` instead — see Portability.)
 
 **Layer 2 — Claude Code (deterministic, harness-enforced):**
 - `--permission-mode bypassPermissions` so workers never stall on an unanswerable prompt, **but**

@@ -140,7 +140,13 @@ resets both, and a run that trips one class while the other has a non-zero count
 **one** comment naming the trigger and reporting the other as context); the `Agent`
 (subagent) deny in all three *unattended* dispatches — worker + checker asserted on the
 real `--dry-run`, the cycle orchestrator at the source level — together with the
-human-present `launch-orchestrator.sh` staying deliberately unrestricted; and
+human-present `launch-orchestrator.sh` staying deliberately unrestricted; the optional
+`extra_read_resolved` read-scope key in both launchers (set → one `--add-dir` per entry,
+in manifest order after `raw_resolved`/`derived_resolved`, with a distinctly labelled
+dry-run line; unset → an `--add-dir` vector and dry-run block byte-identical to before
+the key existed, asserted for a manifest with `derived_resolved` set and one without;
+plus the list parser's comment/blank-line tolerance, and the deny-hook staying untouched
+so the key grants no write carveout); and
 the `bootstrap_worktree_data` critical raw-link gate across all four states
 (missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
 manifest → exempt); and the runner's own worktree guard (two fake checkouts: cwd in the
@@ -217,6 +223,14 @@ into worktrees — is the research-repo standard defined by
    Optionally set `derived_resolved` to share one writable `data/derived` across
    worktrees instead of recomputing per worktree — read the race caveat in
    `templates/project.yml` first, and leave it unset if in doubt.
+   **More than one read-only input tree?** Optionally set `extra_read_resolved` — a
+   list of additional trees, one `--add-dir` per entry on top of `raw_resolved`, in
+   both launchers. It grants **read scope only**: no write carveout (the deny-hook
+   never sees it) and nothing is provisioned into the worktree. Unset, the assembled
+   command is byte-identical to before the key existed. It must **never** name a
+   confidential or restricted-use tree — `--add-dir` scoping, not the deny-hook, is
+   what keeps a worker out of one, so this key is the exact lever that would defeat
+   that. See `templates/project.yml` for the warning and the worked example.
 4. Add the repo to the board + the "Needs Me" view (manual, GitHub Projects UI).
 5. **`dropbox-native` only:** pin the raw data "Available offline" in Dropbox
    (manual).
