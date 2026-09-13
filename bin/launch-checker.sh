@@ -73,18 +73,29 @@ MANIFEST="$ORCH/projects/$REPO_SLUG.yml"
 yml() { sed -nE "s/^$1:[[:space:]]*(.+)/\1/p" "$MANIFEST" \
           | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//' | head -1; }
 expand() { eval echo "$1"; }   # ~ and $VAR expansion for path fields
-# Render a yaml list field as a comma-separated string (mirrors launch-worker.sh).
-yml_list() { python3 - "$MANIFEST" "$1" <<'PY'
+# yml_list KEY [SEP] — render a yaml block-sequence field, entries joined by SEP.
+# SEP defaults to ", " (as in launch-worker.sh, which this function mirrors).
+# Pass $'\n' to get ONE ENTRY PER LINE, which is what a list of PATHS needs: a manifest
+# path can contain spaces (distance-decay-est's "06 Raw_data"), so a comma-joined string
+# cannot be re-split into an array safely. Blank lines and whole-line comments inside the
+# block are tolerated; a trailing `#` comment on an entry is stripped, matching yml();
+# and a final entry at EOF with no trailing newline is still read (issue #74, W1).
+yml_list() { python3 - "$MANIFEST" "$1" "${2-, }" <<'PY'
 import re, sys
 text = open(sys.argv[1]).read()
-m = re.search(rf'^{sys.argv[2]}:\s*(?:#.*)?\n((?:[ \t]+-.*\n?)+)', text, re.M)
+# Every repetition needs its own \n, so a final entry at EOF with NO trailing
+# newline needs the optional tail below (the pre-#74 pattern's `\n?` cannot be
+# restored instead — that makes the repetition zero-width and it matches nothing).
+m = re.search(rf'^{sys.argv[2]}:\s*(?:#.*)?\n((?:[ \t]*(?:-.*|#.*)?\n)*(?:[ \t]*-.*)?)', text, re.M)
 out = []
 if m:
     for line in m.group(1).splitlines():
+        if re.match(r'\s*#', line):      # whole-line / continuation comment
+            continue
         mm = re.match(r'\s*-\s*(.+?)\s*(?:#.*)?$', line)
         if mm and mm.group(1):
             out.append(mm.group(1).strip().strip('"').strip("'"))
-print(', '.join(out))
+print(sys.argv[3].join(out))
 PY
 }
 
@@ -93,6 +104,21 @@ WORKING_CLONE="$(expand "$(yml working_clone)")"
 WORKTREES_DIR="$(expand "$(yml worktrees_dir)")"
 RAW_RESOLVED="$(expand "$(yml raw_resolved)")"
 DERIVED_RESOLVED="$(expand "$(yml derived_resolved)")"   # optional; unset = byte-identical to pre-#38 behavior
+# extra_read_resolved — OPTIONAL, list-valued: additional READ-ONLY input trees to
+# --add-dir (issue #74). Mirrors launch-worker.sh exactly: the two launchers must stay
+# in step, or a checker could not re-run an issue's validation checks that read the
+# extra tree. READ SCOPE ONLY:
+# it creates no write carveout (host/hooks/raw-data-guard.py is untouched by it) and
+# bootstraps nothing into the worktree — the tree is assumed already present, and an
+# --add-dir on a path the worktree never uses is inert. It exists so a narrow,
+# load-bearing raw_resolved does not have to be widened to expose a second public tree;
+# it must NEVER name a confidential or restricted-use tree (see templates/project.yml).
+# Unset = zero entries = an assembled command byte-identical to before the key existed.
+EXTRA_READ_RESOLVED=()
+while IFS= read -r _extra_read; do
+  [ -n "$_extra_read" ] || continue
+  EXTRA_READ_RESOLVED+=( "$(expand "$_extra_read")" )
+done < <(yml_list extra_read_resolved $'\n')
 DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
 
@@ -168,6 +194,13 @@ build_cmd() {
   # derived_resolved, keeping the command byte-identical for manifests that don't (#38).
   ADD_DIRS=( --add-dir "$WORKTREE" --add-dir "$RAW_RESOLVED" --add-dir "$ORCH/logs" )
   [ -n "$DERIVED_RESOLVED" ] && ADD_DIRS+=( --add-dir "$DERIVED_RESOLVED" )
+  # extra_read_resolved, last so the order is worktree, raw, logs, derived, extras (the
+  # worker's order plus this role's logs/ carveout). Guarded on
+  # the count, never built-then-expanded: expanding an EMPTY array under `set -u` is fatal
+  # on bash 3.2 (see CLAUDE.md), and empty is the common case (8 of 9 manifests).
+  if [ "${#EXTRA_READ_RESOLVED[@]}" -gt 0 ]; then
+    for _xr in "${EXTRA_READ_RESOLVED[@]}"; do ADD_DIRS+=( --add-dir "$_xr" ); done
+  fi
   CMD=( env "ORCH_MANIFEST=$MANIFEST" "ORCH_LOGS_DIR=$ORCH/logs" claude -p "$TASK"
         --permission-mode bypassPermissions
         --settings "$SETTINGS_JSON"
@@ -193,6 +226,15 @@ INFO
   [ -n "$DERIVED_RESOLVED" ] && cat <<INFO
 #   derived       : $DERIVED_RESOLVED   <- $DERIVED_NOTE
 INFO
+  # One line per extra read tree, labelled distinctly from `raw (RO)` and `derived` so it
+  # is obvious these are read-scope-only additions. Nothing is printed when the key is
+  # unset, keeping the dry-run byte-identical for the 8 manifests that do not set it.
+  if [ "${#EXTRA_READ_RESOLVED[@]}" -gt 0 ]; then
+    for _xr in "${EXTRA_READ_RESOLVED[@]}"; do cat <<INFO
+#   extra read    : $_xr   <- --add-dir ONLY (read scope; no write carveout, not provisioned)
+INFO
+    done
+  fi
   cat <<INFO
 #   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)
 #                   Agent DISABLED (no subagents: delegation escapes brief + Stop hook)

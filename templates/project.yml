@@ -85,7 +85,45 @@ raw_resolved: TODO              # raw tree data/raw points at; for a code-only r
 # script, or retire the script and let the launcher own the layout. Check before setting it:
 #   test -x <working_clone>/setup-symlinks.sh && echo "branch (a) — derived_resolved is inert"
 #   derived_resolved: ~/Dropbox/projects/<area>/<project>/data/derived
+
+# extra_read_resolved: OPTIONAL, LIST-valued. Additional READ-ONLY input trees the
+# launchers --add-dir on top of raw_resolved — one --add-dir per entry, appended after
+# raw_resolved and derived_resolved. Leave UNSET unless you need it: with no entries the
+# assembled command is byte-identical to before this key existed (the same non-breakage
+# contract derived_resolved carries).
+#
+# WHAT IT IS FOR. raw_resolved is a SCALAR, so it names exactly one tree. A repo with
+# more than one read-only input tree therefore has no way to expose the second — and the
+# two obvious workarounds are both wrong: repointing raw_resolved drops the first tree out
+# of scope, and pointing it at the data/ parent sweeps in every sibling, confidential ones
+# included. This key is the narrow fix: add the one extra tree, change nothing else.
+#
+# WHAT IT IS NOT.
+#   * NOT a write carveout. It grants --add-dir (Layer-1 read scope) and nothing else;
+#     the deny-hook never sees it, so everything it names stays write-protected exactly
+#     as before. Writable outputs still come from output_paths (or derived_resolved).
+#   * NOT provisioning. Unlike derived_resolved it creates and links NOTHING into a
+#     worktree. The tree is assumed already present (e.g. your setup-symlinks.sh links
+#     it); an --add-dir on a path the worktree never uses is simply inert.
+#
+# ⚠️ NEVER USE THIS TO EXPOSE CONFIDENTIAL OR RESTRICTED-USE DATA. Read the
+# "Confidentiality" note below first. --add-dir scoping — not the deny-hook — is what
+# stops a worker reading a sensitive tree, so this key is the exact lever that would
+# defeat it. Only PUBLIC, shareable input trees belong in this list, and a manifest that
+# has a restricted tree should say so in a comment right here, so the next person editing
+# the list is reminded rather than trusted to remember.
+#
+# WORKED EXAMPLE — projects/glyphosate-htbt.yml. That repo has four input trees under
+# data/: raw/, download-manual/, download-script/ (all public) and health-restricted/
+# (restricted-use NCHS microdata). raw_resolved stays pinned to data/raw, and
+# download-script/ — which two issues need for the USGS EPest county estimates — is added
+# here, while health-restricted/ is named in a warning comment and never listed.
+#   extra_read_resolved:
+#     - ~/Dropbox/projects/<area>/<project>/data/download-script
+# Block-sequence form only (same shape as raw_paths/output_paths below). A trailing `#`
+# comment on an entry is stripped; blank lines and whole-line comments are tolerated.
 dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "available offline"
+
 # dropbox_proj: OPTIONAL. Only for a repo that ships its own setup-symlinks.sh AND whose
 # Dropbox root differs from that script's built-in default. The launcher runs the repo's
 # setup-symlinks.sh --worker to provision the worktree's data links; if set, this value
@@ -119,6 +157,8 @@ dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "
 # --add-dir or symlink the confidential tree into a worktree — that, not the deny-hook,
 # is what keeps a worker from reading it. Listing a confidential path in raw_paths is
 # defense-in-depth (blocks writes if the symlink is ever present), not read-protection.
+# This applies to extra_read_resolved above with full force: that key IS an --add-dir, so
+# a confidential tree listed there is readable. Public input trees only.
 
 # READ-ONLY. The deny-hook blocks any write/delete whose canonical (symlink-resolved)
 # path is under one of these prefixes. Paths are relative to data_root unless absolute.
