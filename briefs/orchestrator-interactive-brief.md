@@ -106,10 +106,23 @@ reading the diff. Steer it to the right path by scope:
   direct edit — match ceremony to scope. But that is advisor-console work, not
   your routing job; if the operator makes it, have it recorded in the PR's
   results-summary so the PR stays honest about what it contains.
-- **Anything with real logic:** capture it as intent FIRST — append an
-  acceptance-criteria checkbox to the issue then route it through the normal 
-  path: comment + un-ready the PR + resume hands the ball back to a worker
-  that /pickups the SAME worktree, implements it, and the checker re-verifies. Worktrees are reused across re-dispatches, so this is cheap, not heavyweight.
+- **Anything with real logic:** capture it as intent FIRST, as BOTH halves of the
+  `**Operator directive:` convention, then route it through the normal path:
+    1. **Comment on the issue**, starting with the exact line `**Operator directive:`
+       followed by the instruction in the operator's own words. That lead is what
+       `bin/launch-worker.sh` greps for: every such comment is injected *verbatim* into
+       the next worker's prompt, so the instruction cannot be missed in a long thread.
+    2. **Append the same extension to the issue BODY** as an acceptance criterion,
+       `- [ ] (directive) <the instruction>`. The body stays the single contract, so the
+       checker verifies it like any other criterion and `bin/board-digest.sh` can see it
+       is still outstanding.
+    3. **Then un-ready the PR + label `resume`**, which hands the ball back to a worker
+       that /pickups the SAME worktree, implements it, and the checker re-verifies.
+       Worktrees are reused across re-dispatches, so this is cheap, not heavyweight.
+  Both halves matter and neither substitutes for the other: the comment alone leaves the
+  body contract (and therefore the checker) unaware of the extension — a checker treats a
+  directive comment with no matching body criterion as a worker finding — and the checkbox
+  alone loses the operator's actual wording, which is the part the worker needs.
 
 If the operator reaches for "just make this quick change on the branch" for
 something non-trivial, name the tradeoff and propose the intent-first path

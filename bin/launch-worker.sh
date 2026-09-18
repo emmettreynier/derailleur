@@ -171,11 +171,70 @@ print(json.dumps({"hooks": {
 PY
 )"
 
+# --- operator directives: post-review instructions, injected BY CONSTRUCTION ----
+# The operator usually only knows the *next* ask once results exist, so they extend an
+# issue after review. That extension used to reach the worker only as one comment among
+# many — competing with checker rounds, `**Worker interrupted:` comments and tmux session
+# comments — while the brief framed the issue BODY as the contract and told the worker not
+# to expand scope. The comment lost that contest. So every issue comment led by
+# `**Operator directive:` is fetched here and substituted VERBATIM, oldest first, into the
+# brief's {{OPERATOR_DIRECTIVES}} token: the instruction is now in the prompt the same way
+# {{RAW_RESOLVED}} and {{OUTPUT_PATHS}} are, not something the worker has to go find.
+# (Issue #77. The paired half is a `- [ ] (directive) …` criterion on the issue BODY, which
+# keeps the body the single contract — the worker transcribes it if the operator didn't.)
+#
+# FAIL SOFT, ALWAYS. This must never abort or delay a dispatch: `gh` may be absent (the
+# offline test tier runs with no network at all), unauthenticated, rate-limited, or return
+# something unparseable, and every one of those renders the SAME fixed no-directives line
+# and leaves the exit status 0.
+#
+# Why python3 and not a bare `gh …` in bash: (a) macOS ships no `timeout(1)`, so an
+# unbounded `gh` against a dead network would hang a dispatch that is meant to be cheap —
+# subprocess.run(timeout=) bounds it; (b) parsing in the same process keeps a long comment
+# thread out of argv/envp, which share one 1 MiB ARG_MAX budget (the limit that killed
+# board-digest.sh at 168 board items, issue #79).
+#
+# Output contract: line 1 is the COUNT, everything after it is the brief block.
+NO_DIRECTIVES_LINE='(none — this issue carries no `**Operator directive:` comment.)'
+_directives="$(ISSUE="$ISSUE" REPO="$REPO" NO_DIRECTIVES_LINE="$NO_DIRECTIVES_LINE" \
+  python3 - <<'PY' || true
+import json, os, subprocess
+LEAD = "**Operator directive:"
+bodies = []
+try:
+    r = subprocess.run(
+        ["gh", "issue", "view", os.environ["ISSUE"], "-R", os.environ["REPO"],
+         "--json", "comments"],
+        capture_output=True, text=True, timeout=30)
+    if r.returncode == 0:
+        # gh lists comments oldest-first; keep that order — a later directive refines an
+        # earlier one, so the worker has to read them in the sequence they were written.
+        for c in (json.loads(r.stdout).get("comments") or []):
+            body = (c.get("body") or "").replace("\r\n", "\n").strip()
+            if body.startswith(LEAD):
+                bodies.append(body)
+except Exception:
+    bodies = []          # absent/failing/unparseable gh -> no directives, never an abort
+print(len(bodies))
+print("\n\n".join(bodies) if bodies else os.environ["NO_DIRECTIVES_LINE"], end="")
+PY
+)"
+OPERATOR_DIRECTIVE_COUNT="${_directives%%$'\n'*}"
+OPERATOR_DIRECTIVES="${_directives#*$'\n'}"
+# Belt-and-suspenders for the one failure the block above cannot catch: python3 itself
+# dying (it is swallowed by `|| true`, which would otherwise hand the brief an EMPTY
+# directive section instead of the fixed line). Anything that is not a plain integer is
+# treated as "no directives".
+case "$OPERATOR_DIRECTIVE_COUNT" in
+  ''|*[!0-9]*) OPERATOR_DIRECTIVE_COUNT=0; OPERATOR_DIRECTIVES="$NO_DIRECTIVES_LINE" ;;
+esac
+
 # --- worker protocol brief (system prompt; project-agnostic, manifest-filled) --
 BRIEF="$(BRIEF_ISSUE="$ISSUE" BRIEF_REPO="$REPO" BRIEF_SLUG="$REPO_SLUG" \
          BRIEF_WORKTREE="$WORKTREE" \
          BRIEF_RAW_RESOLVED="$RAW_RESOLVED" BRIEF_OUTPUT_PATHS="$OUTPUT_PATHS" \
          BRIEF_RESULTS_SUMMARY="$RESULTS_SUMMARY" \
+         BRIEF_OPERATOR_DIRECTIVES="$OPERATOR_DIRECTIVES" \
          render_brief "$BRIEF_FILE")"
 
 TASK="Work issue #$ISSUE in $REPO. Read it with \`gh issue view $ISSUE -R $REPO --comments\`; if a PR for this branch already exists, read it and its review comments too. Then do the work and open or update the PR."
@@ -241,6 +300,7 @@ INFO
   fi
   cat <<INFO
 #   outputs       : $OUTPUT_PATHS
+#   directives    : $OPERATOR_DIRECTIVE_COUNT   <- \`**Operator directive:\` issue comments injected into the brief (#77)
 #   tools         : Agent DISABLED (no subagents: delegation escapes brief + Stop hook)
 #   deny-hook     : $HOOK   <- injected via --settings (PreToolUse)
 #   stop-hook     : $STOP_HOOK $ISSUE $REPO   <- injected via --settings (Stop): exit-contract guard

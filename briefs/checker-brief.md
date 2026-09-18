@@ -62,13 +62,15 @@ log path the wrapper printed; GitHub is the only durable record, `tmux ls` is th
 truth for liveness.
 
 What to verify (substantive, not mechanical — CI already did mechanical)
-1. Read the issue: `gh issue view {{ISSUE}} -R {{REPO}}` — get its acceptance criteria.
+1. Read the issue: `gh issue view {{ISSUE}} -R {{REPO}} --comments` — get its acceptance
+   criteria AND its `**Operator directive:` comments (see "Operator directives" below).
 2. Read the PR: `gh pr view {{PR}} -R {{REPO}}` and its diff `gh pr diff {{PR}} -R {{REPO}}`.
    Read the results-summary in the PR body.
-3. For each acceptance criterion, decide met / not-met, with evidence. Where the
-   issue names outputs (a table, figure, cleaned dataset, numbers), confirm they
-   ACTUALLY EXIST and are real — re-run the script or inspect the file; don't trust
-   the PR's claim. Read CI status (`gh pr checks {{PR}} -R {{REPO}}`) rather than
+3. For each acceptance criterion, decide met / not-met, with evidence. A
+   `- [ ] (directive) …` criterion is a FIRST-CLASS acceptance criterion — verify it
+   exactly like the rest. Where the issue names outputs (a table, figure, cleaned
+   dataset, numbers), confirm they ACTUALLY EXIST and are real — re-run the script or
+   inspect the file; don't trust the PR's claim. Read CI status (`gh pr checks {{PR}} -R {{REPO}}`) rather than
    re-deriving what CI already verified.
 4. Sanity-check the outputs themselves (plausible magnitudes, no obvious errors),
    the kind of read a research advisor gives — not a line-by-line style review.
@@ -85,6 +87,20 @@ What to verify (substantive, not mechanical — CI already did mechanical)
    [--offline]` — `dr test` resolves through the `~/.local/bin` symlink to the *primary*
    checkout, so a green tally from it is not evidence about this branch (it now refuses
    from inside a worktree, and any pre-existing `dr test` result in a PR body is suspect).
+
+Operator directives — {{OPERATOR_NAME}} extending the contract after seeing results
+A `**Operator directive:` comment on the issue is an instruction from {{OPERATOR_NAME}},
+not a suggestion, and it carries exactly the weight of a criterion in the issue body. The
+convention has two halves: the COMMENT (the durable record, in their own words, injected
+verbatim into the worker's prompt by `bin/launch-worker.sh`) and a `- [ ] (directive) …`
+checkbox appended to the issue BODY, which keeps the body the single contract. So:
+- Verify every `- [ ] (directive)` criterion like any other acceptance criterion — met or
+  not-met, with evidence.
+- An `**Operator directive:` comment with NO matching criterion in the issue body is an
+  actor=worker finding ("operator directive not transcribed to the issue body"). The
+  worker is told to transcribe it; if it didn't, the directive is invisible to the body
+  contract and to `bin/board-digest.sh`, so bounce it rather than passing it unverified.
+  That is a worker-actionable gap even when every written criterion passes.
 
 Soft review note (advisory — does NOT affect the verdict or findings): the results-summary
 has a "Suggested next steps / follow-ups" section. In your PR comment, briefly weigh in —

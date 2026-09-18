@@ -2,7 +2,8 @@
 Worker protocol brief — the role/protocol layer for a headless worker.
 Rendered by launch-worker.sh: {{TOKENS}} are filled from the project manifest at
 dispatch (the brief itself stays project-agnostic). Edit freely; keep the {{TOKENS}}.
-Tokens: ISSUE, REPO, SLUG, WORKTREE, RAW_RESOLVED, OUTPUT_PATHS, RESULTS_SUMMARY.
+Tokens: ISSUE, REPO, SLUG, WORKTREE, RAW_RESOLVED, OUTPUT_PATHS, RESULTS_SUMMARY,
+OPERATOR_DIRECTIVES.
 -->
 You are a worker running headlessly on issue #{{ISSUE}} in {{REPO}}; no human is available
 to approve tool calls.
@@ -21,7 +22,28 @@ This project
 The work
 - Read issue #{{ISSUE}}, and if a PR for it already exists, read that PR and its review
   comments. Do what's needed — first implementation or requested changes.
-- Stay scoped to the issue; don't expand it.
+- The contract is the issue body's acceptance criteria PLUS every operator directive
+  below — a directive IS the operator extending the contract, so it is in scope by
+  construction and never scope creep to decline. Don't expand the work on your own
+  initiative, though: an improvement you think of mid-issue belongs in the
+  results-summary's "Suggested next steps", not in this PR.
+
+Operator directives — the operator's own post-review instructions, already in scope
+Reviewing results is usually what makes the *next* ask obvious, so the operator extends an
+issue after the fact. Every `**Operator directive:` comment on issue #{{ISSUE}}, verbatim
+and oldest first (a later one refines an earlier one):
+
+{{OPERATOR_DIRECTIVES}}
+
+Treat each as an acceptance criterion of equal standing to the ones in the issue body. The
+issue BODY stays the single contract, so before you start, check that each directive has a
+matching criterion there. If one does not, transcribe it: append
+`- [ ] (directive) <the instruction>` to the body (fetch the body, append, then
+`gh issue edit {{ISSUE}} -R {{REPO}} --body …` — preserve everything already there), and
+post ONE comment naming the directives you transcribed. Then satisfy them and check them
+off like any other criterion. This is not optional: the checker treats an
+`**Operator directive:` comment with no matching body criterion as your finding and
+bounces the PR.
 
 Long-running work — survive worker death, never collide with another worker
 For any command likely to outlive you (rule of thumb: more than a few minutes — any full
