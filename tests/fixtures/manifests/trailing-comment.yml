@@ -1,0 +1,11 @@
+# FIXTURE (issue #76) — a trailing `#` comment on an entry (must be stripped, and the
+# entry must survive), including one on the key line itself.
+repo: example/trailing-comment
+data_root: /nonexistent/trailing-comment/data
+raw_resolved: /nonexistent/trailing-comment/data
+raw_paths:   # the key line carries a comment too
+  - raw/               # stripped
+  - derived/# no space before the hash
+  - reference/
+output_paths:
+  - output/            # stripped

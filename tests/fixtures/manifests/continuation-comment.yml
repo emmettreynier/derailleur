@@ -1,0 +1,13 @@
+# FIXTURE (issue #76) — an entry whose comment continues onto its own line, mid-block.
+# This is the shape live in projects/california-pesticides.yml: the pre-#76 deny-hook
+# parser matched only CONSECUTIVE `-` lines, so the continuation line ended the block
+# and `derived/` was silently dropped from the write-protected prefixes.
+repo: example/continuation-comment
+data_root: /nonexistent/continuation-comment/data
+raw_resolved: /nonexistent/continuation-comment/data
+raw_paths:
+  - raw/         # sources + reference: alpha, beta, gamma,
+                 # delta, epsilon — this continuation line used to end the block
+  - derived/     # everything after the continuation comment was dropped
+output_paths:
+  - output/

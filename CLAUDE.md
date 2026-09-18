@@ -74,6 +74,15 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   fallback for checking correctness. When you change one of those scripts, extend the
   matching `tests/offline/test-*.sh` rather than leaving the check to `--dry-run`
   eyeballing.
+- **The manifest list grammar has two implementations — change them together.**
+  `yml_list()` in `bin/launch-worker.sh` *and* `bin/launch-checker.sh` (duplicated
+  verbatim) and `list_items()` in `host/hooks/raw-data-guard.py` parse the same
+  `projects/*.yml` blocks. When they drift, the deny-hook silently protects fewer paths
+  than the manifest declares (issue #76: a continuation comment ended the hook's block
+  match and dropped `derived/`). `tests/offline/test-manifest-parser-conformance.sh`
+  pins all three against each other and against expected values; it reaches the real
+  parsers by import + heredoc extraction, so restructuring `yml_list()` out of its
+  `<<'PY'` heredoc fails that test loudly rather than silently stopping the comparison.
 - Check `design.md`'s "Verified CLI capabilities" table before relying on a
   `claude` CLI flag — some (e.g. `--max-turns`) don't exist in the pinned version.
 - Any change to the safety model (hooks in `host/hooks/`, `--add-dir`,

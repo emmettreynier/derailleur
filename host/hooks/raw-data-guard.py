@@ -109,11 +109,29 @@ def _manifest_reader():
         return m.group(1).strip().strip('"').strip("'")
 
     def list_items(key: str):
-        block = re.search(rf"^{key}:\s*(?:#.*)?\n((?:[ \t]+-.*\n?)+)", text, re.MULTILINE)
+        # MUST stay byte-for-byte equivalent to the launchers' `yml_list()`
+        # (bin/launch-worker.sh / bin/launch-checker.sh): the deny-hook and the
+        # launchers read the SAME manifest and any divergence silently drops a
+        # declared write-protected prefix. The pre-#76 pattern
+        # `((?:[ \t]+-.*\n?)+)` matched only CONSECUTIVE entry lines, so a blank
+        # line or a comment line inside the block ended the match and every entry
+        # after it was dropped — live in california-pesticides' `raw_paths`, whose
+        # `derived/` entry follows a continuation comment (issue #76).
+        #
+        # The block group therefore accepts entry lines, comment lines and blank
+        # lines alike, and still STOPS at the next non-indented key (a `key:` line
+        # matches none of the alternatives, so the repetition cannot run on into a
+        # following key's entries). Every repetition needs its own \n, so a final
+        # entry at EOF with NO trailing newline needs the optional tail.
+        block = re.search(
+            rf"^{key}:\s*(?:#.*)?\n((?:[ \t]*(?:-.*|#.*)?\n)*(?:[ \t]*-.*)?)",
+            text, re.MULTILINE)
         if not block:
             return []
         items = []
         for line in block.group(1).splitlines():
+            if re.match(r"\s*#", line):      # whole-line / continuation comment
+                continue
             m = re.match(r"\s*-\s*(.+?)\s*(?:#.*)?$", line)
             if m and m.group(1):
                 items.append(m.group(1).strip().strip('"').strip("'"))

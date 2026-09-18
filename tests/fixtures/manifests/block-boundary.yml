@@ -1,0 +1,16 @@
+# FIXTURE (issue #76) — END OF BLOCK. Widening a block matcher is exactly how a parser
+# starts running on into the NEXT key's entries, so each key here is immediately followed
+# by another list key: raw_paths must read ['raw/'] and nothing more, critical_paths must
+# read [] (an empty list directly before a populated one), and output_paths (the block at
+# EOF) must not absorb anything that precedes it.
+repo: example/block-boundary
+data_root: /nonexistent/block-boundary/data
+raw_resolved: /nonexistent/block-boundary/data
+raw_paths:
+  - raw/
+critical_paths:
+extra_read_resolved:
+  - /nonexistent/block-boundary/other-input
+
+output_paths:
+  - output/
