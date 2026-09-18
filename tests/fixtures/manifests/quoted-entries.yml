@@ -1,0 +1,12 @@
+# FIXTURE (issue #76) — quoted entries, including a path with spaces (the
+# distance-decay-est "06 Raw_data" shape) and quotes mixed with a comment.
+repo: example/quoted-entries
+data_root: /nonexistent/quoted-entries/data
+raw_resolved: /nonexistent/quoted-entries/data
+raw_paths:
+  - "06 Raw_data/"
+  - 'single quoted/'
+  - "quoted with comment/"   # stripped
+  - unquoted/
+output_paths:
+  - "output/"

@@ -165,7 +165,23 @@ it there exactly as they do for a draft; `needs-input` stays in the operator's s
 only; draft + `resume` unchanged; a worker's-court PR whose closing-issue board row
 can't be resolved gets a named `⚠` line instead of vanishing; an unchecked
 `- [ ] (directive)` criterion in the issue body marks the `resume` row while a checked one
-does not; and every case makes the same three `gh` calls). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
+does not; and every case makes the same three `gh` calls); and **manifest-parser
+conformance** — the deny-hook (`host/hooks/raw-data-guard.py`) and the launchers'
+`yml_list()` are two implementations of one manifest grammar, and when they disagree
+the hook silently drops a declared
+write-protected prefix, so the test reaches both *real* parsers (importing the hook,
+extracting the launcher's heredoc — a restructure fails loud) and asserts: the two
+launchers still carry one identical copy; the hook returns the **expected** list for a
+continuation comment, a whole-line comment, a blank line, a trailing `#`, quoted entries
+and a final entry with no trailing newline (agreement alone is not enough — two
+identically-broken parsers agree); the block **stops at the next non-indented key**;
+hook == launcher for every key of every fixture *and* of every real manifest in the
+install checkout's `projects/` (resolved via `git rev-parse --git-common-dir`, since a
+worktree's own `projects/` is gitignored and empty — the sweep prints the count it swept
+and `SKIP`s loudly at zero rather than passing vacuously); and, end to end with
+`raw_resolved` neutralised so no blanket prefix can mask it, a Write under a `raw_paths`
+entry that follows a comment line is **denied**.
+If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
 and is byte-identical before/after.
 
 **What the online tier covers:** `board-digest.sh` emits a digest against the live
@@ -504,6 +520,7 @@ derailleur/
 │   └── test.sh                    Two-tier test-suite runner (surfaced as `dr test`)
 ├── tests/                        Shell-layer test suite (framework-free bash)
 │   ├── lib/                          Shared assert + throwaway-sandbox helpers
+│   ├── fixtures/                     Static inputs (e.g. manifests/ for parser conformance)
 │   ├── offline/                      Deterministic tests (no gh/network) — the tier CI runs
 │   └── online/                       Real-`gh` tests that SKIP cleanly when offline
 ├── .github/workflows/ci.yml      CI: runs the offline tier on macos-latest (bash 3.2)

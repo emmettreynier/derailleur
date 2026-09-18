@@ -1,0 +1,11 @@
+# FIXTURE (issue #76) — the final entry sits at EOF with NO TRAILING NEWLINE.
+# Do not "fix" the missing newline: that is the case under test (issue #74, W1).
+repo: example/no-trailing-newline
+data_root: /nonexistent/no-trailing-newline/data
+raw_resolved: /nonexistent/no-trailing-newline/data
+output_paths:
+  - output/
+raw_paths:
+  - raw/         # a continuation comment here too, so the last entry is only
+                 # reachable once the block matcher tolerates comment lines
+  - derived/
