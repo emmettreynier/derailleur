@@ -72,9 +72,20 @@ What to verify (substantive, not mechanical — CI already did mechanical)
    dataset, numbers), confirm they ACTUALLY EXIST and are real — re-run the script or
    inspect the file; don't trust the PR's claim. Read CI status (`gh pr checks {{PR}} -R {{REPO}}`) rather than
    re-deriving what CI already verified.
-4. Sanity-check the outputs themselves (plausible magnitudes, no obvious errors),
+4. VALUE-LEVEL verification — the results-summary is what the operator reads instead of
+   the diff, so its numbers are a claim to be FALSIFIED, not prose to be read. For every
+   number, table, figure, count or file path cited in the summary (`Key outputs`, and any
+   figure quoted in `What I did`), locate the artifact in {{WORKTREE}} and confirm the
+   shown value matches it — open the CSV/`.qd`/log, or re-run the command in `What I ran`
+   and compare. Pull at least the headline values of every table; spot-check the rest.
+   A value with no artifact behind it, a value that disagrees with its artifact, a
+   command whose output could not have produced what is shown, and a standing-guard
+   attestation you can show to be false are all the SAME class of finding
+   (`unverified-claim:`, below) — not a documentation nit.
+
+5. Sanity-check the outputs themselves (plausible magnitudes, no obvious errors),
    the kind of read a research advisor gives — not a line-by-line style review.
-5. Standing guards — verify these on EVERY PR, independent of whether the issue's
+6. Standing guards — verify these on EVERY PR, independent of whether the issue's
    acceptance criteria mention them: (1) no secrets, credentials, absolute local paths
    (`/Users/...`, `/home/...`), or PII in the diff; (2) the changed entry point runs
    clean from a fresh session; (3) seeds set wherever sampling/simulation/bootstrap was
@@ -82,7 +93,7 @@ What to verify (substantive, not mechanical — CI already did mechanical)
    reason); (5) raw inputs untouched — the diff changes nothing under the repo's declared
    raw-data path. A standing-guard violation is a real finding even when every explicit
    criterion passes.
-6. Re-running a test suite: use the repo-local entry point from the PR's worktree, not an
+7. Re-running a test suite: use the repo-local entry point from the PR's worktree, not an
    installed CLI. When the repo under review IS derailleur, that means `./bin/test.sh
    [--offline]` — `dr test` resolves through the `~/.local/bin` symlink to the *primary*
    checkout, so a green tally from it is not evidence about this branch (it now refuses
@@ -146,7 +157,29 @@ Then pick the verdict from (criteria met?) + (any worker-actionable finding?):
 - failure_class: hard = a real contract failure; transient = flaky infra (e.g. CI runner
   died) a retry would clear; none = no failure.
 
-A standing-guard violation (checks 1–5 above) is always actor=worker, so it CAN bounce a PR
+Finding class — `unverified-claim:` (the fabrication case)
+A claim in the PR that you cannot verify against an artifact is the most serious thing you
+can find here, because it is invisible to everyone downstream: {{OPERATOR_NAME}} reviews the
+results-summary, not the diff. Report it as a finding whose `title` carries the fixed
+prefix `unverified-claim:` and then names BOTH the claim and the artifact that contradicts
+it (or the absence of one), e.g.
+`unverified-claim: Key outputs reports beta=0.043, but results/main-est.csv has 0.0117`,
+or `unverified-claim: guard 2 attests ./bin/pipeline.R runs clean; it exits 1 (see log)`.
+Route it with the vocabulary that already exists — nothing new:
+- `severity: high`, `actor: worker` — the worker CAN fix this, by producing the real
+  output or by reporting the failure honestly, so it is the worker's court.
+- `verdict = fail` (an output is missing/wrong), with the normal fail route:
+  `gh pr ready --undo` + label `resume`. Repeats are already caught by `WORKER_LIMIT`
+  escalating to `needs-input`; do not invent an escalation of your own.
+- Say in your comment what an honest finish would have looked like — a criterion reported
+  as unmet in the results-summary, or a `needs-input` comment naming the obstacle — since
+  that is what you want back.
+Do NOT use this class for a value you merely could not check cheaply: if verifying it
+needs a run you cannot do, that is `blocked` (or an actor=operator finding), and you say
+which value you could not reach. An unverified claim is one you actively falsified or
+one with no artifact behind it at all.
+
+A standing-guard violation (checks 1–6 above) is always actor=worker, so it CAN bounce a PR
 whose explicit criteria all pass: changes_requested when the explicit criteria otherwise
 pass, or fail when the guard failure means an output/criterion is itself unmet.
 
