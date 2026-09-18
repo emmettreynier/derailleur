@@ -52,9 +52,20 @@ data_root: $CLONE
 raw_resolved: $CLONE
 YML
 
+# Stub `gh` so the launchers' offline `gh` calls resolve without touching the network:
+# the checker's `gh pr view --json …` (an OPEN, ready PR closing #45) and the worker's
+# `**Operator directive:` comment fetch (issue #77), which sees no `comments` key here and
+# fails soft to zero directives — exactly the degraded path this tier should exercise.
+GHDIR="$(sandbox_tmp)"
+cat >"$GHDIR/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s' '{"isDraft":false,"headRefName":"issue-45","closingIssuesReferences":[{"number":45}],"state":"OPEN"}'
+SH
+chmod +x "$GHDIR/gh"
+
 # --- 1. worker --------------------------------------------------------------------
 rc=0
-worker_out="$("$SB/bin/launch-worker.sh" agent-deny-demo 45 --dry-run 2>&1)" || rc=$?
+worker_out="$(PATH="$GHDIR:$PATH" "$SB/bin/launch-worker.sh" agent-deny-demo 45 --dry-run 2>&1)" || rc=$?
 assert_rc 0 "$rc" "launch-worker --dry-run assembles cleanly in a sandbox" \
   "The worker dry-run should print its assembled command and exit 0 — see bin/launch-worker.sh."
 assert_matches "$worker_out" '--disallowedTools( +[A-Za-z]+)* +Agent( |$)' \
@@ -62,13 +73,6 @@ assert_matches "$worker_out" '--disallowedTools( +[A-Za-z]+)* +Agent( |$)' \
   "bin/launch-worker.sh build_cmd() must pass --disallowedTools Agent: a subagent escapes the brief, the Stop-hook exit contract, and the budget (issue #45)."
 
 # --- 2. checker -------------------------------------------------------------------
-# Stub `gh` so `gh pr view --json …` resolves offline to an OPEN, ready PR closing #45.
-GHDIR="$(sandbox_tmp)"
-cat >"$GHDIR/gh" <<'SH'
-#!/usr/bin/env bash
-printf '%s' '{"isDraft":false,"headRefName":"issue-45","closingIssuesReferences":[{"number":45}],"state":"OPEN"}'
-SH
-chmod +x "$GHDIR/gh"
 rc=0
 checker_out="$(PATH="$GHDIR:$PATH" "$SB/bin/launch-checker.sh" agent-deny-demo 1 --dry-run 2>&1)" || rc=$?
 assert_rc 0 "$rc" "launch-checker --dry-run assembles cleanly in a sandbox" \

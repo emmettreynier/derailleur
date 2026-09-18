@@ -293,6 +293,20 @@ def line(r, extra=""):
     if len(t) > 72: t = t[:69] + "…"
     return f"- [{r['project']}] {short(r['repo_url'])}#{r['num']} — {t}{tag}{flag}{pause}{tmuxm}{extra}"
 
+# An operator directive (issue #77) reaches the worker as a `**Operator directive:` issue
+# COMMENT, and is mirrored into the issue BODY as a `- [ ] (directive) …` acceptance
+# criterion so the body stays the single contract. The body is already in the board JSON,
+# so the digest can tell "handed back because the operator extended the scope" from
+# "handed back because the checker found something" for FREE — no extra `gh` call, which
+# is the whole reason the convention puts the marker in the body.
+DIRECTIVE_RE = re.compile(r"^- \[ \]\s*\(directive\)", re.I)
+
+def directive_pending(r):
+    """True if the issue body carries an UNCHECKED `- [ ] (directive)` criterion."""
+    return any(DIRECTIVE_RE.match(ln.strip()) for ln in (r["body"] or "").splitlines())
+
+DIRECTIVE_MARK = "  ✍ operator-directive pending"
+
 def spec_excerpt(body):
     """The intake-gate signal for a dispatch candidate: a one-line lead plus its
     acceptance-criteria checkboxes. Absence of checkboxes is itself the signal
@@ -446,7 +460,10 @@ actionable = [
 ]
 w(f"## Dispatch candidates — worker's court ({len(resume)+len(actionable)})")
 w(f"**resume — revisions to re-dispatch ({len(resume)}):**")
-[w(line(r)) for r in resume] or w("- none")
+# ✍ marks the rows whose hand-back was the OPERATOR extending the issue, not a checker
+# bounce — a different read for the orchestrator (nothing is wrong with the PR; there is
+# more to do) and a different one for the operator scanning the digest.
+[w(line(r, DIRECTIVE_MARK if directive_pending(r) else "")) for r in resume] or w("- none")
 if unrouted:
     # Not dispatchable from the digest (no board row to name), so deliberately NOT
     # counted as a candidate above — but never silent: the operator either adds the

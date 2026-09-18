@@ -74,6 +74,15 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   fallback for checking correctness. When you change one of those scripts, extend the
   matching `tests/offline/test-*.sh` rather than leaving the check to `--dry-run`
   eyeballing.
+- Three comment **leads** make GitHub comments machine-legible: `**Checker verdict:`
+  (counted by `CHECKER_ROUND_LEADS`, `bin/dispatch-common.sh`), `**Worker interrupted:` /
+  `**Worker incomplete:` (counted by `NO_FINISH_LEADS`, `bin/ledger-prune.sh`), and
+  `**Operator directive:` (issue #77 — injected verbatim into the worker's prompt by
+  `bin/launch-worker.sh`, mirrored into the issue body as a `- [ ] (directive)` criterion).
+  The directive lead must stay **out of both counting lists**: it is the operator replying,
+  so it resets the worker counters like any other comment, and counting it would escalate
+  the operator's own instruction as a failed round. Its fetch must also stay **fail-soft** —
+  the offline tier dry-runs the launcher with no network, a failing `gh` and no `gh` at all.
 - Check `design.md`'s "Verified CLI capabilities" table before relying on a
   `claude` CLI flag — some (e.g. `--max-turns`) don't exist in the pinned version.
 - Any change to the safety model (hooks in `host/hooks/`, `--add-dir`,

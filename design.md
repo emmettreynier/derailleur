@@ -263,6 +263,23 @@ The determinism of the whole loop rests on these. Digest script keys on:
 - `blocked` — waiting on something external.
 - *Work vs review* is carried by **PR draft/ready state**, not a label.
 
+## Comment-lead conventions (`**Operator directive:` and friends)
+
+Three leads make a comment *machine-legible* without giving anything but GitHub a source of truth. `**Checker verdict: <verdict>**` (posted by the checker, counted by `checker_rounds_this_generation`) and `**Worker interrupted:` / `**Worker incomplete:` (posted by `finalize_dispatch`, counted by `trailing_no_finish_counts`) already exist. **`**Operator directive:`** *(issue #77, 2026-09-18)* is the third, and the only one a human writes.
+
+**The problem.** Post-review feedback that *extends* an issue is the common case, not the exception — you only know what to ask for next once results exist. But the worker brief framed the issue **body** as the contract and said, flatly, "stay scoped to the issue; don't expand it," so an operator comment asking to push the analysis further read as scope creep to decline. It had no standing in the contract, no fixed lead to make it findable, and it competed with checker rounds, `**Worker interrupted:` comments and tmux session comments on a long thread. Nothing carried it mechanically: `{{RAW_RESOLVED}}`, `{{OUTPUT_PATHS}}` and `{{RESULTS_SUMMARY}}` are in the prompt *by construction*; the operator's actual instruction was not.
+
+**The convention has two halves, and both are required.**
+
+1. **Comment lead `**Operator directive:`** — the durable, greppable record of the instruction in the operator's own words, posted on the **issue**. `bin/launch-worker.sh` fetches every such comment at dispatch and substitutes them, **verbatim and oldest-first**, into the worker brief's `{{OPERATOR_DIRECTIVES}}` token. The worker cannot fail to read it; the brief now says a directive is in scope *by construction* while still forbidding self-initiated expansion.
+2. **Body marker `- [ ] (directive) <the instruction>`** — the same extension appended to the issue body's acceptance criteria. The **body stays the single contract**, so the checker verifies a directive exactly like any other criterion with no second source of truth, and `bin/board-digest.sh` detects an outstanding directive from the issue body it *already has* in the board JSON (zero additional `gh` calls) and marks the `resume` row `✍ operator-directive pending` — distinguishing "the operator extended this" from "the checker bounced this."
+
+The worker **self-heals the common operator omission**: a directive comment with no matching body criterion gets transcribed to the body by the worker, which then says so in one comment. The checker treats an untranscribed directive as an `actor=worker` finding, so it bounces rather than passing unverified — an untranscribed directive is invisible to the body contract and to the digest.
+
+**The fetch fails soft, always.** `gh` may be absent (the offline test tier runs with no network), unauthenticated, rate-limited, slow, or return something unparseable; every one of those renders one fixed no-directives line and leaves the dispatch untouched and the exit status 0. It runs through `python3`'s `subprocess.run(timeout=…)` rather than a bare `gh` in bash, because macOS ships no `timeout(1)` and an unbounded call on a dead network would hang a dispatch, and because parsing in-process keeps a long comment thread out of the 1 MiB `ARG_MAX` that killed `board-digest.sh` at 168 board items (issue #79).
+
+**The round caps deliberately do not see it.** `**Operator directive:` is in neither `NO_FINISH_LEADS` (`bin/ledger-prune.sh`) nor `CHECKER_ROUND_LEADS` (`bin/dispatch-common.sh`). It needs no change there and must not get one: a directive comment is an *intervening reply*, so it resets `WORKER_LIMIT`/`WORKER_WAIT_LIMIT` to `(0, 0)` the way any human reply does — which is the correct behavior, since the operator writing a directive is exactly the evidence that the issue is progressing rather than wedged. Adding the lead to either list would instead count the operator's own instruction as a failed round.
+
 ## Skill library (always WIP)
 
 Skills encode "how Emmett likes task-type X done," lifting global conventions (`data.table`/`collapse`, `here`, `qs2`, `=`) up to procedure level. They serve **everything** on the boot recipe — autonomous workers, the advisor console, and ordinary interactive sessions — so the library is independently valuable and **perpetually a work in progress**, growing as patterns recur.

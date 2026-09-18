@@ -222,3 +222,29 @@ assert_contains "$esc" "2 exit-to-wait attempt(s)" \
 nesc="$(grep -c '^issue comment' "$GH_CALLS" 2>/dev/null || true)"
 assert_eq "1" "${nesc:-0}" "exactly one escalation comment is posted per prune" \
   "The second class is an extra LINE in the existing comment, never a second comment."
+
+# (i) an `**Operator directive:` comment (issue #77) is an intervening REPLY, not a
+# round. It must reset BOTH counters exactly like any other human comment — the operator
+# writing a directive is evidence the issue is progressing, not evidence it is wedged, and
+# counting it would penalize them for asking. This is the negative half of the #77
+# contract: the lead is deliberately absent from NO_FINISH_LEADS (asserted at the source
+# level in test-operator-directive.sh), and this is what that absence must BUY.
+DIRECTIVE_C='**Operator directive: also report the 2019 cohort, split by county.'
+write_comments "$CUT_C" "$CUT_C" "$CUT_C" "$NOPR_C" "$DIRECTIVE_C"
+write_incomplete_ledger "$LED2"
+out11="$(run_prune "$LED2")"
+assert_not_contains "$out11" "reached (" \
+  "an operator directive trailing four hard-class comments resets both counters to (0, 0)" \
+  "A directive comment must count as an intervening reply — adding the lead to NO_FINISH_LEADS would escalate the operator's own instruction as a failed round (#77)."
+assert_not_contains "$(cat "$GH_CALLS")" "--add-label needs-input" \
+  "no needs-input label follows an operator directive" \
+  "The reset must prevent the escalation side effects, not just the message."
+
+# …and the reset is real, not an artifact of the fixture: the same four comments WITHOUT
+# the trailing directive do escalate.
+write_comments "$CUT_C" "$CUT_C" "$CUT_C" "$NOPR_C"
+write_incomplete_ledger "$LED2"
+out12="$(run_prune "$LED2")"
+assert_contains "$out12" "WORKER_LIMIT reached (4/4)" \
+  "the same four comments without the trailing directive DO escalate" \
+  "If they didn't, the reset assertion above would pass vacuously."

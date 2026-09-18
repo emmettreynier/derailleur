@@ -7,7 +7,11 @@ Copy to a repo's .github/pull_request_template.md, or have the worker emit it as
 
 ## Goal
 
-<!-- What the issue asked for, one line. -->
+<!-- What the issue asked for, one line. Then, if the operator extended the contract
+     mid-flight — any `**Operator directive:` comment / `- [ ] (directive)` criterion —
+     list those extensions on their own lines under "Operator directives honored", so the
+     Goal never understates what this PR actually contains. Omit the line when there
+     were none. -->
 Closes #
 
 ## What I did

@@ -31,11 +31,15 @@ PR_URL="$REPO_URL/pull/11"
 #                         closes #3, so passing anything else models "issue not on
 #                         the board")
 #   $5 board status        the fixture row's Status field (default "In Progress")
+#   $6 extra body lines   appended to the fixture issue BODY (used to plant a
+#                         `- [ ] (directive)` acceptance criterion — issue #77)
 # Every case's gh shim logs its calls to CALLS_LOG — a path in the sandbox ROOT, not
 # in the per-case sandbox, because run_digest is called in a $(…) subshell and any
 # variable it sets (the sandbox path included) dies with that subshell.
 run_digest() {
-  local draft="$1" labels="$2" pid="$3" board_num="$4" status="${5:-In Progress}" sb shim
+  local draft="$1" labels="$2" pid="$3" board_num="$4" status="${5:-In Progress}" \
+        extra_body="${6:-}" body sb shim
+  body="$(printf 'One-line lead.\n\n- [ ] a criterion\n%s' "$extra_body")"
   sb="$(new_sandbox)"
   sandbox_copy_script "$sb" board-digest
   cp "$REPO_ROOT/bin/config-common.sh" "$sb/bin/config-common.sh"
@@ -43,7 +47,7 @@ run_digest() {
   write_project_manifest "$sb" "$SLUG" "$REPO"
 
   # --- fixture JSON the shim serves ------------------------------------------
-  LABELS="$labels" BOARD_NUM="$board_num" BOARD_STATUS="$status" \
+  LABELS="$labels" BOARD_NUM="$board_num" BOARD_STATUS="$status" BODY="$body" \
     REPO_URL="$REPO_URL" python3 - "$sb/board.json" <<'PY'
 import json, os, sys
 labels = [l for l in os.environ["LABELS"].split(",") if l]
@@ -51,8 +55,7 @@ json.dump({"items": [{
     "title": "Fixture issue", "status": os.environ["BOARD_STATUS"], "project": "Test",
     "repository": os.environ["REPO_URL"], "labels": labels,
     "content": {"type": "Issue", "number": int(os.environ["BOARD_NUM"]),
-                "title": "Fixture issue",
-                "body": "One-line lead.\n\n- [ ] a criterion\n"},
+                "title": "Fixture issue", "body": os.environ["BODY"]},
 }]}, open(sys.argv[1], "w"))
 PY
   DRAFT="$draft" PR_URL="$PR_URL" python3 - "$sb/prs.json" <<'PY'
@@ -114,6 +117,9 @@ RESUME_HDR="**resume — revisions to re-dispatch"
 CHECK_HDR="**Ready PRs awaiting checker"
 NI_HDR="**needs-input ("
 UNROUTED_HDR="closing issue not on the board"
+# The ✍ marker board-digest.sh appends to a resume row whose issue body still carries an
+# unchecked `- [ ] (directive)` acceptance criterion (issue #77).
+DIRECTIVE_MARK="✍ operator-directive pending"
 ROW="$SLUG#3 — Fixture issue"
 
 # --- (a) ready + resume + no live worker -> worker's court, exactly once ------
@@ -132,6 +138,9 @@ assert_contains "$out" "## Dispatch candidates — worker's court (1)" \
 assert_eq 3 "$(gh_calls)" \
   "the digest makes 3 gh calls (board + closed-issue search + one pr list)" \
   "Routing is a classification change over data already fetched — it must add no query."
+assert_not_contains "$(block "$out" "$RESUME_HDR")" "$DIRECTIVE_MARK" \
+  "a plain checker-bounce resume carries NO operator-directive marker" \
+  "The marker must distinguish an operator extension from a checker bounce, not tag every resume row (#77)."
 
 # --- (b) ready + resume + a live worker -> in-flight, not a candidate ---------
 out="$(run_digest false resume "$$" 3)"
@@ -192,3 +201,31 @@ assert_contains "$out" "## Dispatch candidates — worker's court (0)" \
   "the ⚠ line is reported, not counted as a dispatchable candidate"
 assert_eq 1 "$(count_of "$out" "$PR_URL")" \
   "the unroutable PR is listed in exactly one place"
+
+# --- (g) resume whose issue body carries an UNCHECKED (directive) criterion ---------
+# An operator directive (issue #77) is mirrored into the issue BODY as
+# `- [ ] (directive) …`, and the body is ALREADY in the board JSON — so the digest can
+# distinguish "handed back because the operator extended the scope" from "handed back
+# because the checker found something" for free. The gh-call assertion is the point: the
+# marker must be derived, never fetched.
+out="$(run_digest false resume "" 3 "In Progress" "- [ ] (directive) also report the 2019 cohort
+")"
+assert_contains "$(block "$out" "$RESUME_HDR")" "$ROW" \
+  "a directive-marked resume is still a dispatch candidate"
+assert_contains "$(block "$out" "$RESUME_HDR")" "$DIRECTIVE_MARK" \
+  "an unchecked (directive) criterion marks the resume row distinctly (issue #77)" \
+  "board-digest.sh must read the marker off the issue body it already has in the board JSON."
+assert_eq 3 "$(gh_calls)" \
+  "the directive-marked case makes the SAME 3 gh calls (board + closed search + pr list)" \
+  "The marker is derived from the board JSON body — it must add no query (#77)."
+
+# --- (h) a SATISFIED directive is not still pending --------------------------------
+out="$(run_digest false resume "" 3 "In Progress" "- [x] (directive) already done
+")"
+assert_contains "$(block "$out" "$RESUME_HDR")" "$ROW" \
+  "a resume row with a checked (directive) criterion is still listed"
+assert_not_contains "$(block "$out" "$RESUME_HDR")" "$DIRECTIVE_MARK" \
+  "a CHECKED (directive) criterion does not mark the row as pending" \
+  "The marker tracks outstanding work; a satisfied directive must stop showing it (#77)."
+assert_eq 3 "$(gh_calls)" \
+  "the checked-directive case makes the same 3 gh calls"

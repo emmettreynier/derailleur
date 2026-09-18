@@ -151,14 +151,21 @@ the `bootstrap_worktree_data` critical raw-link gate across all four states
 (missing/broken → abort; populated → link + proceed; empty → note + proceed; code-only
 manifest → exempt); and the runner's own worktree guard (two fake checkouts: cwd in the
 other one → refuses and names both trees; unrelated repo / same tree / symlinked same
-tree / non-git cwd → runs; the tree-under-test banner present either way); and
+tree / non-git cwd → runs; the tree-under-test banner present either way); the
+`**Operator directive:` injection channel (one directive reaching `--append-system-prompt`
+verbatim, several in posting order, a near-miss lead ignored, and the fail-soft battery —
+a failing `gh`, a garbage-returning `gh`, and `gh` absent from `PATH` each rendering one
+fixed no-directives line and exiting 0 — plus whole-block dry-run byte-identity for the
+zero-directive case, an unchanged `--add-dir` vector, and the lead's deliberate absence
+from both round-counting lists); and
 `board-digest.sh`'s open-PR bucketing against fixture board + PR JSON through a `gh`
 shim (a **ready** PR whose issue carries `resume` routes to the worker's court and
 appears in the resume bucket exactly once; a live worker, `hold` or `blocked` suppress
 it there exactly as they do for a draft; `needs-input` stays in the operator's section
 only; draft + `resume` unchanged; a worker's-court PR whose closing-issue board row
-can't be resolved gets a named `⚠` line instead of vanishing; and every case makes the
-same three `gh` calls). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
+can't be resolved gets a named `⚠` line instead of vanishing; an unchecked
+`- [ ] (directive)` criterion in the issue body marks the `resume` row while a checked one
+does not; and every case makes the same three `gh` calls). If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
 and is byte-identical before/after.
 
 **What the online tier covers:** `board-digest.sh` emits a digest against the live
@@ -322,6 +329,30 @@ the workers/checkers it dispatched to completion without blocking your session).
 session booted from
 this checkout with the digest pre-injected (same posture), use
 `dr launch-orchestrator` instead.
+
+### Extend an issue after review (`**Operator directive:`)
+
+Reviewing a finished PR is usually what makes the *next* ask obvious, so the common case
+is wanting the analysis pushed **further** than the issue specified. That is a first-class
+move, not scope creep — it just has to be written down in two places:
+
+1. **Comment on the issue**, starting with the exact line `**Operator directive:` followed
+   by the instruction in your own words. `bin/launch-worker.sh` injects every such comment
+   **verbatim, oldest first** into the next worker's prompt (a `{{OPERATOR_DIRECTIVES}}`
+   token in `briefs/worker-brief.md`), so it can't be lost in a long thread the way an
+   ordinary comment can.
+2. **Append the same extension to the issue body**'s acceptance criteria as
+   `- [ ] (directive) <the instruction>`. The body stays the single contract, so the
+   checker verifies it like any other criterion and the board digest marks the row
+   `✍ operator-directive pending` until it is checked off.
+
+Then un-ready the PR and label `resume`; the next worker picks up the same worktree.
+`/orchestrate` does all of this for you when you tell it to hand a PR back. If you write
+only the comment, the worker transcribes the missing checkbox itself and says so; if it
+doesn't, the checker bounces the PR for it. The lead is deliberately invisible to the
+round caps (`WORKER_LIMIT`, `CHECKER_LIMIT`) — a directive counts as an intervening reply
+and resets them, exactly like any other comment of yours. See `design.md` →
+*Comment-lead conventions*.
 
 ### Run one orchestration pass by hand
 
