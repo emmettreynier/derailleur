@@ -40,9 +40,18 @@ command -v python3 >/dev/null || { echo "board-digest: python3 not found" >&2; e
 # re-checked every cycle at a full CHECKER_BUDGET; `hold`/`blocked` stop parking work.
 # Keep this far above the board's real size, and shout if we ever reach it.
 BOARD_LIMIT="${BOARD_LIMIT:-1000}"
-board_json="$(gh project item-list "$PROJECT" --owner "$OWNER" --format json --limit "$BOARD_LIMIT")"
-closed_json="$(gh search issues --owner "$PR_OWNER" --state closed \
-  --json number,repository,closedAt --limit 100 2>/dev/null || echo '[]')"
+# Both payloads go to FILES, not shell variables handed to python3 through the
+# environment. argv+envp share one ARG_MAX budget (1 MiB on macOS), and the board
+# JSON is ~93% issue bodies: at 168 items it crossed 1 MB and every run died with
+# `Argument list too long` before python3 ever started. A file path is O(1).
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+BOARD_FILE="$tmpdir/board.json"
+CLOSED_FILE="$tmpdir/closed.json"
+gh project item-list "$PROJECT" --owner "$OWNER" --format json --limit "$BOARD_LIMIT" > "$BOARD_FILE"
+gh search issues --owner "$PR_OWNER" --state closed \
+  --json number,repository,closedAt --limit 100 > "$CLOSED_FILE" 2>/dev/null \
+  || echo '[]' > "$CLOSED_FILE"
 
 # Onboarded repos = those with a manifest; the orchestrator can only act on
 # these, so the digest is scoped to them (a non-dispatchable issue it can't see
@@ -82,18 +91,20 @@ else
   tmux_live=""
 fi
 
-BOARD_JSON="$board_json" CLOSED_JSON="$closed_json" PR_OWNER="$PR_OWNER" BOARD_LIMIT="$BOARD_LIMIT" \
+BOARD_FILE="$BOARD_FILE" CLOSED_FILE="$CLOSED_FILE" PR_OWNER="$PR_OWNER" BOARD_LIMIT="$BOARD_LIMIT" \
 OPERATOR_NAME="$OPERATOR_NAME" SCHEDULED_ALLOW="$scheduled_allow" TMUX_LIVE="$tmux_live" \
 LEDGER="$LEDGER" DONE_DAYS="$DONE_DAYS" ONBOARDED_SLUGS="$onboarded_slugs" python3 <<'PY'
 import json, os, re, subprocess, sys
 from datetime import datetime, timezone, timedelta
 
-board  = json.loads(os.environ["BOARD_JSON"]).get("items", [])
+with open(os.environ["BOARD_FILE"]) as f:
+    board = json.load(f).get("items", [])
 # A full page means the query almost certainly truncated. Never silent: a dropped row
 # reads as an unlabelled issue, which misroutes its PR (see the BOARD_LIMIT note above).
 board_limit = int(os.environ.get("BOARD_LIMIT") or 0)
 board_truncated = bool(board_limit) and len(board) >= board_limit
-closed = json.loads(os.environ["CLOSED_JSON"])
+with open(os.environ["CLOSED_FILE"]) as f:
+    closed = json.load(f)
 pr_owner = os.environ.get("PR_OWNER", "")
 operator = os.environ.get("OPERATOR_NAME", "the operator")
 done_days = int(os.environ["DONE_DAYS"])
