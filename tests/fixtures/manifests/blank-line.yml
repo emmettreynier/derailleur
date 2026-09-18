@@ -1,0 +1,11 @@
+# FIXTURE (issue #76) — a blank line in the middle of a block.
+repo: example/blank-line
+data_root: /nonexistent/blank-line/data
+raw_resolved: /nonexistent/blank-line/data
+raw_paths:
+  - raw/
+
+  - derived/
+output_paths:
+
+  - output/

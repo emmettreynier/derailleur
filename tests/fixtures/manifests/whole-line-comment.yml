@@ -1,0 +1,13 @@
+# FIXTURE (issue #76) — a whole-line comment at column 0 in the middle of a block.
+repo: example/whole-line-comment
+data_root: /nonexistent/whole-line-comment/data
+raw_resolved: /nonexistent/whole-line-comment/data
+raw_paths:
+  - raw/
+# a column-0 comment sitting inside the block
+  - derived/
+  # an indented comment too
+  - reference/
+output_paths:
+  - output/
+  - results/
