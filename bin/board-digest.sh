@@ -170,11 +170,19 @@ def has(r, lab): return lab in r["labels"]
 # must read it: an issue with an open PR is in the loop (working / in review),
 # NOT a fresh dispatch candidate. A ready PR routes to the checker; the checker's
 # verdict then lands as an issue label (checked-pass -> operator; resume -> worker).
+# `commits` and `comments` are fetched for the STALE-PASS check below (issue #83): the
+# head commit's date and the newest `**Checker verdict:` comment's date are the only two
+# facts that can tell a genuinely-reviewed merge-ready PR from one whose `checked-pass`
+# label is left over from an earlier round. Both ride on the SAME `gh pr list` call this
+# already makes — the digest's call count is unchanged. `commits` carries every commit's
+# message body, so this is the one field here with a non-trivial payload cost; there is no
+# lighter way to get a head-commit timestamp out of `gh pr list` (`headRefOid` gives the
+# sha with no date), and a per-PR lookup would add a call per open PR.
 def open_prs(repo):
     try:
         r = subprocess.run(
             ["gh", "pr", "list", "-R", repo, "--state", "open", "--json",
-             "number,title,url,isDraft,reviewDecision,headRefName,closingIssuesReferences,labels"],
+             "number,title,url,isDraft,reviewDecision,headRefName,closingIssuesReferences,labels,commits,comments"],
             capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
             return json.loads(r.stdout)
@@ -394,7 +402,53 @@ def pr_issue_row(pr):  # the board row for whichever issue this PR closes
             return r
     return None
 
-approved, awaiting_check, worker_court_prs = [], [], []
+# ---- STALE PASS: detection, not just prevention (issue #83) ------------------
+# `set_routing_label` (bin/dispatch-common.sh) now stops a `checked-pass` from SURVIVING a
+# later round, and the two briefs emit the clearing form. None of that helps a label that
+# is already stale — on the board right now, or applied by a hand that skipped the helper.
+# So the digest verifies the claim instead of trusting the label: a PR is merge-ready only
+# if a checker has actually seen its CURRENT head.
+#
+# The test is the one a human ran by hand, twice, to catch the observed cases: compare the
+# head commit's date against the newest `**Checker verdict:` comment on the PR. A commit
+# pushed AFTER the verdict is work the verdict cannot possibly cover.
+#
+# Deliberately conservative in three ways, because a false "stale" is cheap (the PR is
+# still surfaced to the operator, in a bucket that says why) and a false "merge-ready" is
+# the bug:
+#   * unknowable -> NOT stale. No `commits` / no `comments` key at all means the fetch
+#     didn't carry them; the check abstains rather than condemning every PR.
+#   * a human `reviewDecision == APPROVED` is never called stale — that approval is the
+#     operator's own act, not a checker label, and it is theirs to re-evaluate.
+#   * no `**Checker verdict:` comment AT ALL on a `checked-pass` PR is reported, with its
+#     own reason line. A checker always posts one before labelling, so its absence means
+#     the label did not come from a completed review in this PR's history.
+VERDICT_LEAD = "**Checker verdict:"
+
+def stale_pass_reason(pr):
+    """Why this ready+`checked-pass` PR is NOT trustworthy as merge-ready, or None."""
+    if pr.get("reviewDecision") == "APPROVED":
+        return None                       # the operator's own approval — their call
+    commits = pr.get("commits")
+    comments = pr.get("comments")
+    if not commits or comments is None:
+        return None                       # unknowable -> leave the bucket alone
+    head = max((c.get("committedDate") or "") for c in commits)
+    if not head:
+        return None
+    # Both timestamps are `%FT%TZ` UTC, so a lexicographic compare is a valid ordering
+    # (the same reasoning publish_recovered_verdict's generation check relies on).
+    verdicts = sorted(c.get("createdAt") or "" for c in comments
+                      if (c.get("body") or "").startswith(VERDICT_LEAD))
+    if not verdicts:
+        return (f"no `{VERDICT_LEAD}` comment on this PR at all, yet its issue carries "
+                f"`{CHECKED_PASS}` (head commit {head})")
+    if head > verdicts[-1]:
+        return (f"head commit {head} is NEWER than the latest `{VERDICT_LEAD}` comment "
+                f"({verdicts[-1]}) — these commits have never been checked")
+    return None
+
+approved, awaiting_check, worker_court_prs, stale_pass = [], [], [], []
 for pr in open_pr_list:
     ilabs = pr_issue_labels(pr)
     parked = bool(ilabs & {NEEDS_INPUT, HOLD, BLOCKED})   # same guards for draft & ready
@@ -402,7 +456,11 @@ for pr in open_pr_list:
         if not pr_has_live_worker(pr) and not parked:
             worker_court_prs.append(pr)   # nobody working it, nothing parking it -> dispatch
     elif CHECKED_PASS in ilabs or pr.get("reviewDecision") == "APPROVED":
-        approved.append(pr)               # checker passed (or human-approved) -> merge gate
+        why = stale_pass_reason(pr)
+        if why:
+            stale_pass.append((pr, why))  # labelled passed, but not for THIS head (#83)
+        else:
+            approved.append(pr)           # checker passed (or human-approved) -> merge gate
     elif RESUME in ilabs and not parked and not pr_has_live_worker(pr):
         worker_court_prs.append(pr)       # handed back but never re-drafted -> dispatch (#69)
     elif NEEDS_INPUT in ilabs or RESUME in ilabs:
@@ -417,9 +475,17 @@ for pr in open_pr_list:
 # ---- NEEDS THE OPERATOR (their court — surface, never dispatch) --------------
 ni  = [r for r in rows if has(r, NEEDS_INPUT)]
 nd  = [r for r in rows if has(r, NEEDS_DEF)]
-w(f"## Needs {operator} — human's court ({len(ni)+len(nd)+len(approved)}) · surface to them, never dispatch")
+w(f"## Needs {operator} — human's court ({len(ni)+len(nd)+len(approved)+len(stale_pass)}) · surface to them, never dispatch")
 w(f"**Checker-passed PRs — ready to merge ({len(approved)}):**")
 [w(pr_line(p)) for p in approved] or w("- none")
+if stale_pass:
+    w(f"**⚠ STALE PASS — labelled `{CHECKED_PASS}` but NOT verified at this head ({len(stale_pass)}):**")
+    w(f"_Deliberately NOT in the merge-ready bucket above. `orchestrator-cycle.sh` also "
+      f"skips dispatching a checker on a `{CHECKED_PASS}` issue, so these will not fix "
+      f"themselves: re-check by hand (`dr launch-checker <slug> <pr#>`) after clearing the "
+      f"label, or merge only if you have reviewed the new commits yourself (issue #83)._")
+    for p, why in stale_pass:
+        w(pr_line(p, extra=f"  ⚠ {why}"))
 w(f"**needs-input ({len(ni)}):**")
 [w(line(r)) for r in ni] or w("- none")
 w(f"**needs-definition ({len(nd)}):**")

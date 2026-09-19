@@ -267,6 +267,55 @@ The determinism of the whole loop rests on these. Digest script keys on:
 - `blocked` — waiting on something external.
 - *Work vs review* is carried by **PR draft/ready state**, not a label.
 
+### The three routing labels are mutually exclusive *(issue #83, 2026-09-18)*
+
+`checked-pass`, `resume` and `needs-input` do not describe properties of an issue — they
+answer one question, **whose court is this in**, so at most one may ever be on an issue at
+a time. (`hold`/`blocked` are parking and `needs-definition` is an intake verdict; neither
+is a court hand-off, and neither participates.)
+
+Nothing enforced that until #83. Every write site used a bare `--add-label` and `bin/`
+contained no `--remove-label` at all, so a new label simply stacked on the old one.
+Observed twice on 2026-09-18 (`distance-decay-est` #73 and #44), same sequence each time:
+a checker passes → `checked-pass`; a new round is opened → `resume` + the PR back to
+draft; the worker finalizes → `resume` clears and **`checked-pass` remains**. The PR is
+ready again, carrying commits no checker has ever seen, labelled as passed. In #73 that
+round-2 work was later found to contain a hard fail, so the stale label was sitting on
+genuinely broken code.
+
+The consequence on the **unattended** path is the worse one: `orchestrator-cycle.sh` skips
+dispatching a checker on any ready PR whose issue matches `checked-pass|needs-input|resume`,
+so a stale `checked-pass` means the PR is *never checked at all* — it sits at the merge gate
+indefinitely and the cycle actively declines to fix it. `board-digest.sh` buckets it as
+merge-ready, and `ledger-prune.sh`'s `handle_no_clean_finish` early-returns on it too.
+
+**The fix is structural, in two layers.**
+
+1. **Prevention — one writer.** `set_routing_label <repo> <issue> <label>`
+   (`bin/dispatch-common.sh`, beside `verdict_label`) applies a label and clears whichever
+   other routing label is present, in **one** `gh issue edit` (the API accepts `--add-label`
+   plus repeated `--remove-label`, so there is no half-relabelled window). It is idempotent
+   — zero writes when the label is already the only routing label — and fails soft, warning
+   and returning 1 rather than guessing. It is the **only** thing in `bin/` that writes a
+   routing label; all four call sites (`publish_recovered_verdict`, `ledger-prune.sh`'s
+   `relabel_resume` and its `needs-input` escalation, `orchestrator-cycle.sh`'s
+   `CHECKER_LIMIT` escalation) go through it, `ledger-prune.sh`'s Python shelling back into
+   bash on purpose so the invariant has exactly one implementation. The **checker** applies
+   its own label as its last act, inside its own session, so it is not reachable by the
+   helper — `briefs/checker-brief.md` carries the clearing form at all three verdicts, and
+   `briefs/orchestrator-interactive-brief.md` carries it on the new-intent hand-back (the
+   path both observed cases actually came from).
+2. **Detection — verify the claim, don't trust the label.** Prevention does nothing for a
+   label that is *already* stale, so `board-digest.sh` no longer buckets a ready PR as
+   merge-ready on the strength of `checked-pass` alone: it compares the head commit's
+   `committedDate` against the newest `**Checker verdict:` comment and, when the head is
+   newer (or there is no verdict comment at all), reports it under **⚠ STALE PASS** with
+   both timestamps instead. That is the check a human ran by hand to catch #73 and #44.
+   Conservative in both directions: a missing `commits`/`comments` field abstains rather
+   than condemning, a human `reviewDecision == APPROVED` is never called stale, and a
+   demoted PR is still surfaced with its reason rather than dropped. Both fields ride the
+   `gh pr list` call the digest already makes, so the call count is unchanged.
+
 ## Comment-lead conventions (`**Operator directive:` and friends)
 
 Three leads make a comment *machine-legible* without giving anything but GitHub a source of truth. `**Checker verdict: <verdict>**` (posted by the checker, counted by `checker_rounds_this_generation`) and `**Worker interrupted:` / `**Worker incomplete:` (posted by `finalize_dispatch`, counted by `trailing_no_finish_counts`) already exist. **`**Operator directive:`** *(issue #77, 2026-09-18)* is the third, and the only one a human writes.

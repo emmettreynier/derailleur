@@ -10,6 +10,12 @@
 # it again. It now routes to the worker's court under the SAME guards as its draft
 # sibling (no live worker, no needs-input/hold/blocked), and a worker's-court PR whose
 # closing-issue board row can't be resolved is reported with a ⚠ instead of dropped.
+#
+# Cases (i)–(l) pin the STALE-PASS bucket (issue #83): a ready PR whose issue carries
+# `checked-pass` is only merge-ready if a checker has actually seen its CURRENT head.
+# Head commit newer than the newest `**Checker verdict:` comment — or no such comment at
+# all — means the label is left over from an earlier round, and the PR must NOT be
+# offered to the operator as reviewed.
 set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$TEST_DIR/../lib/assert.sh"
@@ -33,12 +39,18 @@ PR_URL="$REPO_URL/pull/11"
 #   $5 board status        the fixture row's Status field (default "In Progress")
 #   $6 extra body lines   appended to the fixture issue BODY (used to plant a
 #                         `- [ ] (directive)` acceptance criterion — issue #77)
+#   $7 head commit date   ISO8601; empty (default) omits `commits`/`comments` from the
+#                         fixture PR entirely, which is the "unknowable" case the
+#                         stale-pass check must abstain on (issue #83)
+#   $8 verdict comment    ISO8601 createdAt for a `**Checker verdict:` PR comment;
+#                         empty with $7 set models a checked-pass PR that carries no
+#                         verdict comment at all
 # Every case's gh shim logs its calls to CALLS_LOG — a path in the sandbox ROOT, not
 # in the per-case sandbox, because run_digest is called in a $(…) subshell and any
 # variable it sets (the sandbox path included) dies with that subshell.
 run_digest() {
   local draft="$1" labels="$2" pid="$3" board_num="$4" status="${5:-In Progress}" \
-        extra_body="${6:-}" body sb shim
+        extra_body="${6:-}" head_date="${7:-}" verdict_date="${8:-}" body sb shim
   body="$(printf 'One-line lead.\n\n- [ ] a criterion\n%s' "$extra_body")"
   sb="$(new_sandbox)"
   sandbox_copy_script "$sb" board-digest
@@ -58,14 +70,25 @@ json.dump({"items": [{
                 "title": "Fixture issue", "body": os.environ["BODY"]},
 }]}, open(sys.argv[1], "w"))
 PY
-  DRAFT="$draft" PR_URL="$PR_URL" python3 - "$sb/prs.json" <<'PY'
+  DRAFT="$draft" PR_URL="$PR_URL" HEAD_DATE="$head_date" VERDICT_DATE="$verdict_date" \
+    python3 - "$sb/prs.json" <<'PY'
 import json, os, sys
-json.dump([{
+pr = {
     "number": 11, "title": "Fixture PR", "url": os.environ["PR_URL"],
     "isDraft": os.environ["DRAFT"] == "true", "reviewDecision": "",
     "headRefName": "issue-3", "closingIssuesReferences": [{"number": 3}],
     "labels": [],
-}], open(sys.argv[1], "w"))
+}
+# `commits`/`comments` only when the case asks for them: their ABSENCE is itself a
+# fixture state (the stale-pass check must abstain rather than condemn — issue #83),
+# and every pre-#83 case here relies on the digest behaving exactly as it did before.
+head = os.environ.get("HEAD_DATE") or ""
+if head:
+    pr["commits"] = [{"committedDate": head}]
+    vd = os.environ.get("VERDICT_DATE") or ""
+    pr["comments"] = ([{"createdAt": vd, "body": "**Checker verdict: pass**\n\ndetail"}]
+                      if vd else [])
+json.dump([pr], open(sys.argv[1], "w"))
 PY
 
   if [ -n "$pid" ]; then
@@ -229,3 +252,57 @@ assert_not_contains "$(block "$out" "$RESUME_HDR")" "$DIRECTIVE_MARK" \
   "The marker tracks outstanding work; a satisfied directive must stop showing it (#77)."
 assert_eq 3 "$(gh_calls)" \
   "the checked-directive case makes the same 3 gh calls"
+
+# --- (i)-(l) the stale-pass bucket (issue #83) -------------------------------
+MERGE_HDR="**Checker-passed PRs — ready to merge"
+STALE_HDR="**⚠ STALE PASS"
+PR_ROW="$SLUG#11 — Fixture PR"
+
+# (i) checker saw this head: verdict comment NEWER than the head commit -> merge-ready.
+out="$(run_digest false checked-pass "" 3 "In Progress" "" \
+        2026-09-17T22:00:00Z 2026-09-17T22:48:42Z)"
+assert_contains "$(block "$out" "$MERGE_HDR")" "$PR_ROW" \
+  "a checked-pass PR whose head predates its verdict comment IS merge-ready" \
+  "The stale-pass check must not demote a genuinely reviewed PR."
+assert_not_contains "$out" "$STALE_HDR" \
+  "…and no stale-pass bucket is emitted at all when nothing is stale"
+assert_eq 3 "$(gh_calls)" \
+  "the stale-pass check adds NO gh call (commits/comments ride the existing pr list)" \
+  "Both fields were added to the pr list --json set; a per-PR lookup would add a call per PR."
+
+# (j) THE OBSERVED BUG: commits pushed after the verdict, label still checked-pass.
+#     Timestamps are distance-decay-est #73's, from the issue: verdict file 2026-09-17
+#     22:48:42, round-2 commits the next morning.
+out="$(run_digest false checked-pass "" 3 "In Progress" "" \
+        2026-09-18T08:35:43Z 2026-09-17T22:48:42Z)"
+assert_contains "$(block "$out" "$MERGE_HDR")" "- none" \
+  "a head commit NEWER than the verdict is NOT offered as merge-ready (issue #83)" \
+  "This is the check that would have caught #73/#44 without a human comparing mtimes."
+assert_contains "$(block "$out" "$STALE_HDR")" "$PR_ROW" \
+  "…it is reported as stale-pass instead of vanishing" \
+  "Demoting it out of merge-ready must never drop it from the digest entirely."
+assert_contains "$out" "2026-09-18T08:35:43Z" \
+  "the stale-pass line names the head commit date it judged on"
+assert_contains "$out" "2026-09-17T22:48:42Z" \
+  "…and the verdict comment date it compared against"
+assert_eq 3 "$(gh_calls)" "the stale case still makes the same 3 gh calls"
+
+# (k) checked-pass with NO `**Checker verdict:` comment anywhere on the PR.
+out="$(run_digest false checked-pass "" 3 "In Progress" "" 2026-09-18T08:35:43Z "")"
+assert_contains "$(block "$out" "$MERGE_HDR")" "- none" \
+  "checked-pass with no verdict comment at all is not merge-ready"
+assert_contains "$(block "$out" "$STALE_HDR")" "$PR_ROW" \
+  "…it is reported as stale-pass, with its own reason" \
+  "A checker always posts the comment before labelling; its absence means the label is not a review."
+assert_contains "$out" "no \`**Checker verdict:\` comment on this PR at all" \
+  "the reason distinguishes 'never checked' from 'checked at an older head'"
+
+# (l) UNKNOWABLE -> abstain. No commits/comments in the PR record (a fetch that did not
+#     carry them) must leave the pre-#83 bucketing exactly as it was.
+out="$(run_digest false checked-pass "" 3)"
+assert_contains "$(block "$out" "$MERGE_HDR")" "$PR_ROW" \
+  "with no commit/comment data the PR stays merge-ready (abstain, don't condemn)" \
+  "A missing field is not evidence of staleness; the check must degrade to the old behavior."
+assert_not_contains "$out" "$STALE_HDR" \
+  "…and no stale-pass bucket is emitted"
+assert_eq 3 "$(gh_calls)" "the abstaining case makes the same 3 gh calls"

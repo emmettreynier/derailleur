@@ -83,6 +83,19 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   pins all three against each other and against expected values; it reaches the real
   parsers by import + heredoc extraction, so restructuring `yml_list()` out of its
   `<<'PY'` heredoc fails that test loudly rather than silently stopping the comparison.
+- **Routing labels (`checked-pass` / `resume` / `needs-input`) are mutually exclusive, and
+  `set_routing_label` in `bin/dispatch-common.sh` is the ONLY thing in `bin/` allowed to
+  write one.** They encode whose court the work is in, so applying one must clear the other
+  two in the same `gh issue edit` — a bare `--add-label` stacks them, and a stale
+  `checked-pass` under a `resume` makes the next ready PR look merge-ready to
+  `board-digest.sh` *and* makes `orchestrator-cycle.sh` refuse to dispatch a checker on it,
+  so unreviewed code parks at the merge gate forever (issue #83, observed twice). The
+  **checker** applies its own label from inside its own session and is therefore NOT covered
+  by the helper: `briefs/checker-brief.md`'s three verdict routes carry the clearing form,
+  and so does the new-intent hand-back in `briefs/orchestrator-interactive-brief.md`. If you
+  add a routing-label write, route it through the helper —
+  `tests/offline/test-routing-labels.sh` greps `bin/` and fails if you don't. `hold`,
+  `blocked` and `needs-definition` are NOT routing labels and must stay untouched by it.
 - Three comment **leads** make GitHub comments machine-legible: `**Checker verdict:`
   (counted by `CHECKER_ROUND_LEADS`, `bin/dispatch-common.sh`), `**Worker interrupted:` /
   `**Worker incomplete:` (counted by `NO_FINISH_LEADS`, `bin/ledger-prune.sh`), and

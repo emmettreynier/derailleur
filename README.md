@@ -158,6 +158,18 @@ a failing `gh`, a garbage-returning `gh`, and `gh` absent from `PATH` each rende
 fixed no-directives line and exiting 0 — plus whole-block dry-run byte-identity for the
 zero-directive case, an unchanged `--add-dir` vector, and the lead's deliberate absence
 from both round-counting lists); and
+the **routing-label invariant** (`tests/offline/test-routing-labels.sh`) — the three
+labels are mutually exclusive and `set_routing_label` is their one writer, so a stateful
+`gh` shim whose label set really honours `--add-label`/`--remove-label` pins both
+directions (`checked-pass` → `resume` and back), that the relabel is ONE `gh issue edit`,
+idempotence (zero writes when the label is already the only routing label), that `hold` /
+`needs-definition` are never touched, the fail-soft battery (no `gh` on PATH, a failing
+edit, a non-routing label argument, a missing issue — each returns 1 and leaves the issue
+exactly as it was), the failed-lookup fallback that still routes, the end-to-end path
+through `ledger-prune.sh` (its `resume` relabel and its `WORKER_LIMIT` escalation both
+clearing), and a grep of the real `bin/` + `briefs/checker-brief.md` asserting no
+routing-label `--add-label` escapes the helper and all three verdict routes emit the
+clearing form; and
 `board-digest.sh`'s open-PR bucketing against fixture board + PR JSON through a `gh`
 shim (a **ready** PR whose issue carries `resume` routes to the worker's court and
 appears in the resume bucket exactly once; a live worker, `hold` or `blocked` suppress
@@ -165,8 +177,12 @@ it there exactly as they do for a draft; `needs-input` stays in the operator's s
 only; draft + `resume` unchanged; a worker's-court PR whose closing-issue board row
 can't be resolved gets a named `⚠` line instead of vanishing; an unchecked
 `- [ ] (directive)` criterion in the issue body marks the `resume` row while a checked one
-does not; and every case makes the same three `gh` calls); and **manifest-parser
-conformance** — the deny-hook (`host/hooks/raw-data-guard.py`) and the launchers'
+does not; a ready `checked-pass` PR whose head commit is NEWER than the newest
+`**Checker verdict:` comment — or which has no such comment at all — is demoted out of
+merge-ready into a named **⚠ STALE PASS** bucket that reports both timestamps, while one
+whose head predates its verdict stays merge-ready and one with no commit/comment data at
+all abstains to the pre-#83 behavior; and every case makes the same three `gh` calls); and
+**manifest-parser conformance** — the deny-hook (`host/hooks/raw-data-guard.py`) and the launchers'
 `yml_list()` are two implementations of one manifest grammar, and when they disagree
 the hook silently drops a declared
 write-protected prefix, so the test reaches both *real* parsers (importing the hook,
@@ -362,7 +378,18 @@ move, not scope creep — it just has to be written down in two places:
    checker verifies it like any other criterion and the board digest marks the row
    `✍ operator-directive pending` until it is checked off.
 
-Then un-ready the PR and label `resume`; the next worker picks up the same worktree.
+Then un-ready the PR and label `resume`, **clearing `checked-pass` in the same command** —
+the three routing labels are mutually exclusive, and a leftover `checked-pass` makes the
+next ready PR look merge-ready while `orchestrator-cycle.sh` declines to dispatch a checker
+on it (issue #83):
+
+```bash
+gh pr ready <pr#> -R <owner/repo> --undo
+gh issue edit <issue#> -R <owner/repo> --add-label resume \
+  --remove-label checked-pass --remove-label needs-input
+```
+
+The next worker picks up the same worktree.
 `/orchestrate` does all of this for you when you tell it to hand a PR back. If you write
 only the comment, the worker transcribes the missing checkbox itself and says so; if it
 doesn't, the checker bounces the PR for it. The lead is deliberately invisible to the

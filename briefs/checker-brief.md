@@ -196,7 +196,8 @@ signal with a comment + an issue label. You NEVER merge; merging is always {{OPE
     Post your comment — for pass_with_findings, lay out clearly the decisions/FYIs you're
     surfacing for {{OPERATOR_NAME}} — and hand it to them. Leave the PR ready:
       gh pr comment {{PR}} -R {{REPO}} --body "<summary + findings + the JSON>"
-      gh issue edit {{ISSUE}} -R {{REPO}} --add-label checked-pass
+      gh issue edit {{ISSUE}} -R {{REPO}} --add-label checked-pass \
+        --remove-label resume --remove-label needs-input
     A checked-pass PR is {{OPERATOR_NAME}}'s merge gate — they decide merge vs. send back.
 
 - changes_requested OR fail  (≥1 worker-actionable item → worker's court):
@@ -204,17 +205,31 @@ signal with a comment + an issue label. You NEVER merge; merging is always {{OPE
     another pass at the actor=worker items:
       gh pr comment {{PR}} -R {{REPO}} --body "<findings + the JSON>"
       gh pr ready {{PR}} -R {{REPO}} --undo
-      gh issue edit {{ISSUE}} -R {{REPO}} --add-label resume
+      gh issue edit {{ISSUE}} -R {{REPO}} --add-label resume \
+        --remove-label checked-pass --remove-label needs-input
 
 - blocked:
     Post your question as a PR comment and escalate to {{OPERATOR_NAME}}:
       gh pr comment {{PR}} -R {{REPO}} --body "<the specific question + the JSON>"
-      gh issue edit {{ISSUE}} -R {{REPO}} --add-label needs-input
+      gh issue edit {{ISSUE}} -R {{REPO}} --add-label needs-input \
+        --remove-label checked-pass --remove-label resume
     Leave the PR ready (don't un-draft); it's {{OPERATOR_NAME}}'s court now.
+
+Every one of the three commands above CLEARS the other two routing labels in the same
+`gh issue edit`. That is not decoration. `checked-pass`, `resume` and `needs-input` encode
+WHOSE COURT the work is in, so at most one may ever be on an issue — and a stale
+`checked-pass` left underneath a `resume` makes the next ready PR look merge-ready to the
+operator's digest AND makes `orchestrator-cycle.sh` decline to dispatch a checker on it at
+all, so genuinely unreviewed code sits at the merge gate indefinitely (issue #83, observed
+twice). Shell callers get this from `set_routing_label` in `bin/dispatch-common.sh`, the one
+place in `bin/` that writes a routing label; YOU apply your own label as your last act, in
+your own session, so you are not covered by that helper and the clearing form above is the
+only place the fix can live for you. Use it verbatim.
 
 Write the verdict JSON FIRST, then post + label: the JSON on disk is what survives if the
 session is cut off between the two, and `bin/ledger-prune.sh` recovers the routing from it on
 the next cycle (issue #63 — the verdict→label mapping above is mirrored in `verdict_label` in
-`bin/dispatch-common.sh`; if you ever change one, change the other).
+`bin/dispatch-common.sh`, and the clearing is mirrored in `set_routing_label` beside it; if
+you ever change one, change the others).
 
 Finish by printing a one-line summary: VERDICT <verdict> on PR #{{PR}} — <action taken>.
