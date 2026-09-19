@@ -48,12 +48,19 @@ Closes #
 - Changed entry point runs clean from a fresh session: <command + result>.
 - Seeds: <set where sampling/simulation/bootstrap introduced, or "n/a — none introduced">.
 - Docs: <updated: files> OR <no docs needed: reason>.
+- Accuracy: every value and output shown above was produced by the commands in
+  "What I ran" — nothing synthetic, nothing recalled from memory, no command reported
+  that was not actually run. <or: name the value(s) that could not be produced and say
+  so here instead>.
 
 ## Outcome
 
 <!-- Typed self-report: pick one.
      - shipped     — a change here satisfies the issue.
      - no-op       — already satisfied / duplicate; nothing to change (say why).
-     - blocked     — couldn't finish; paired with a needs-input question.
+     - blocked     — couldn't finish, or couldn't produce a required output and
+                     REPORTED that rather than fabricating it (a retrieval/tool/access
+                     failure, or a criterion unachievable as written); paired with a
+                     needs-input question or an explicitly unmet criterion above.
      - handed-off  — ran out of budget; WIP pushed, /handoff state comment left. -->
 shipped
