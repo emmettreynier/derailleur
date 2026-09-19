@@ -473,8 +473,14 @@ for pr in open_pr_list:
         awaiting_check.append(pr)         # ready, not passed, not handed back -> checker's court
 
 # ---- NEEDS THE OPERATOR (their court — surface, never dispatch) --------------
-ni  = [r for r in rows if has(r, NEEDS_INPUT)]
-nd  = [r for r in rows if has(r, NEEDS_DEF)]
+# `Done` is excluded: nothing ever strips a routing/definition label when an issue
+# closes, so a pure label match parks every closed-but-labelled issue in the
+# operator's court forever, and the count grows monotonically as issues are closed.
+# `rows` carries no open/closed state (it is built from board items only), so board
+# status is the signal — the same test the recently-closed section below uses — and
+# it costs no extra `gh` call.
+ni  = [r for r in rows if has(r, NEEDS_INPUT) and r["status"] != "Done"]
+nd  = [r for r in rows if has(r, NEEDS_DEF)   and r["status"] != "Done"]
 w(f"## Needs {operator} — human's court ({len(ni)+len(nd)+len(approved)+len(stale_pass)}) · surface to them, never dispatch")
 w(f"**Checker-passed PRs — ready to merge ({len(approved)}):**")
 [w(pr_line(p)) for p in approved] or w("- none")
