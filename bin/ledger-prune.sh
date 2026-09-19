@@ -273,7 +273,7 @@ sweep_unowned_verdicts
 
 # ── phase 3: the prune pass ───────────────────────────────────────────────────
 
-LEDGER="$LEDGER" GITHUB_HANDLE="$GITHUB_HANDLE" python3 <<'PY'
+LEDGER="$LEDGER" GITHUB_HANDLE="$GITHUB_HANDLE" ORCH="$ORCH" python3 <<'PY'
 import json, os, re, subprocess, sys
 
 ledger = os.environ["LEDGER"]
@@ -338,12 +338,31 @@ def has_open_pr(repo, num):
         pass
     return None  # unknown -> don't touch
 
-def relabel_resume(repo, num):
+def route_label(repo, num, label):
+    """Apply a ROUTING label through the one shell helper that owns them —
+    `set_routing_label` in bin/dispatch-common.sh — rather than a bare `--add-label`.
+
+    Issue #83: every routing-label write in the system was add-only, so labelling an
+    issue `resume` (or `needs-input`) left a previous `checked-pass` sitting on it, and
+    a ready PR then looked merge-ready to both the operator's digest and the autonomous
+    cycle while carrying commits no checker had ever seen. The three labels are
+    mutually exclusive; applying one must clear the others in the same act.
+
+    This shells back into bash (one subshell per escalation, a handful per cycle)
+    ON PURPOSE: a second Python implementation of the invariant is a thing that can
+    drift from the shell one, which is the exact failure mode #83 is about. Fails soft
+    like everything else here — the helper warns on stderr and we return False."""
     try:
-        subprocess.run(["gh", "issue", "edit", str(num), "-R", repo,
-                         "--add-label", "resume"], capture_output=True, timeout=15)
+        r = subprocess.run(
+            ["bash", "-c",
+             'source "$1/bin/dispatch-common.sh"; set_routing_label "$2" "$3" "$4"',
+             "ledger-prune", os.environ["ORCH"], repo, str(num), label],
+            capture_output=True, text=True, timeout=40)
+        if r.stderr.strip():
+            sys.stderr.write(r.stderr)
+        return r.returncode == 0
     except Exception:
-        pass
+        return False
 
 def issue_comments(repo, num):
     try:
@@ -412,8 +431,7 @@ def escalate_needs_input(repo, num, n, limit, knob, what, also=""):
     round-5 review, folded into issue #51). It is appended to the same comment, never
     posted as a second one, and it never displaces the trigger's own naming."""
     try:
-        subprocess.run(["gh", "issue", "edit", str(num), "-R", repo,
-                         "--add-label", "needs-input"], capture_output=True, timeout=15)
+        route_label(repo, num, "needs-input")
         subprocess.run(["gh", "issue", "comment", str(num), "-R", repo, "--body",
             f"🔁 Worker limit reached: {n} {what} in a row, never reaching `ready` "
             f"(limit {limit}, `{knob}`). "
@@ -469,7 +487,7 @@ def handle_no_clean_finish(repo, num):
     # Cosmetic only (digest doesn't need it) — keeps the plain GitHub label view
     # legible for a human scanning issues outside the orchestrator's own digest.
     if "resume" not in labs and has_open_pr(repo, num) is True:
-        relabel_resume(repo, num)
+        route_label(repo, num, "resume")
     return None
 
 def is_terminal(status):

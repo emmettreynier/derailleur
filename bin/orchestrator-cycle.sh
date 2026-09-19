@@ -207,7 +207,10 @@ for pr in json.load(sys.stdin):
     if [ "${NROUNDS:-0}" -ge "$CHECKER_LIMIT" ]; then
       echo "  $slug PR #$pr — $NROUNDS checker rounds without a to-operator verdict (interrupted, incomplete, or changes_requested) (limit $CHECKER_LIMIT); escalating to $OPERATOR_NAME"
       if [ "$DRY" = 0 ]; then
-        gh issue edit "$issue" -R "$repo" --add-label needs-input 2>/dev/null || true
+        # set_routing_label, not a bare --add-label: the escalation must CLEAR whichever
+        # other routing label got us here (a `resume` from the last bounce), or the issue
+        # ends up in two courts at once (issue #83).
+        set_routing_label "$repo" "$issue" needs-input >/dev/null || true
         gh pr comment "$pr" -R "$repo" --body "🔁 Checker limit reached: $NROUNDS checker rounds without a to-operator verdict (interrupted, incomplete, or changes_requested). Escalating to @$GITHUB_HANDLE — the holdout is likely a research-judgment call a worker can't settle, or a checker that cannot finish unattended. Labeled needs-input."
       fi
       continue

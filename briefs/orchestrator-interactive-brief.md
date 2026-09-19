@@ -121,9 +121,26 @@ reading the diff. Steer it to the right path by scope:
        `- [ ] (directive) <the instruction>`. The body stays the single contract, so the
        checker verifies it like any other criterion and `bin/board-digest.sh` can see it
        is still outstanding.
-    3. **Then un-ready the PR + label `resume`**, which hands the ball back to a worker
-       that /pickups the SAME worktree, implements it, and the checker re-verifies.
-       Worktrees are reused across re-dispatches, so this is cheap, not heavyweight.
+    3. **Then un-ready the PR + label `resume`, CLEARING `checked-pass` in the same
+       command**, which hands the ball back to a worker that /pickups the SAME worktree,
+       implements it, and the checker re-verifies. Worktrees are reused across
+       re-dispatches, so this is cheap, not heavyweight.
+
+       ```sh
+       gh pr ready <pr#> -R <owner/repo> --undo
+       gh issue edit <issue#> -R <owner/repo> --add-label resume \
+         --remove-label checked-pass --remove-label needs-input
+       ```
+
+       The `--remove-label` half is load-bearing, not tidiness. You are almost always
+       handing back a PR a checker just PASSED, so its issue is carrying `checked-pass`;
+       a bare `--add-label resume` leaves it there, and when the worker finalizes and
+       clears `resume` the PR goes ready again still labelled as passed. The digest then
+       buckets it as merge-ready and `orchestrator-cycle.sh` refuses to dispatch a
+       checker on it, so the directive work you just commissioned reaches the merge gate
+       having been reviewed by nobody (issue #83 — observed twice on 2026-09-18, once on
+       code a later checker hard-failed). The three routing labels are mutually
+       exclusive; write them that way.
   Both halves matter and neither substitutes for the other: the comment alone leaves the
   body contract (and therefore the checker) unaware of the extension — a checker treats a
   directive comment with no matching body criterion as a worker finding — and the checkbox

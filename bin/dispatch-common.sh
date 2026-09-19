@@ -589,6 +589,112 @@ verdict_label() {
   return 0
 }
 
+# ── routing labels: the mutually-exclusive whose-court set ───────────────────
+# ROUTING_LABELS — `checked-pass`, `resume`, `needs-input`. They encode WHOSE COURT the
+# work is in, so at most one may ever be on an issue. `hold`/`blocked` (parking) and
+# `needs-definition` (an intake verdict, not a court hand-off) are deliberately NOT in
+# this set and are never touched by the helper below.
+ROUTING_LABELS="checked-pass resume needs-input"
+
+# set_routing_label <repo> <issue> <label> — apply <label> and clear whichever OTHER
+# routing label is present, as ONE `gh issue edit`. Prints what it did; returns 0 on
+# success (including the no-op), 1 when nothing landed.
+#
+# WHY IT EXISTS (issue #83). Every routing-label write in this system used a bare
+# `--add-label` and `bin/` contained no `--remove-label` at all, so a new label was
+# simply stacked on the old one. Observed twice on 2026-09-18 (distance-decay-est #73,
+# #44): checker passes -> `checked-pass`; a new round is opened -> `resume` + the PR
+# back to draft; the worker finalizes -> `resume` clears and `checked-pass` REMAINS. The
+# PR is ready again, carrying commits no checker has ever seen, labelled as passed. In
+# #73 that round-2 work was later found to contain a hard fail, so the stale label was
+# sitting on genuinely broken code.
+#
+# The unattended consequence is the worse one: `orchestrator-cycle.sh` skips dispatching
+# a checker on any ready PR whose issue matches `checked-pass|needs-input|resume`, so a
+# stale `checked-pass` means the PR is NEVER CHECKED — it sits at the operator's merge
+# gate indefinitely and the cycle actively declines to fix it. `board-digest.sh` buckets
+# it as merge-ready, and `ledger-prune.sh`'s `handle_no_clean_finish` early-returns on it.
+# Teaching four call sites and two briefs to remember the invariant is strictly worse
+# than making it structural: this helper is the ONLY thing in `bin/` that writes one.
+#
+# IDEMPOTENT. It reads the issue's labels first and writes nothing at all when <label> is
+# already the only routing label present — a re-run of `ledger-prune.sh`'s reconciler must
+# not churn the issue (the same discipline `publish_recovered_verdict` keeps for its
+# comment). Only labels actually present are removed, so the call can never hit gh's
+# `'<x>' not found` error for a routing label a repo never defined.
+#
+# ONE CALL, NOT TWO. `gh issue edit` accepts `--add-label` and repeated `--remove-label`
+# in a single invocation (verified against the live API), so a failure leaves the issue
+# untouched rather than half-relabelled. Do NOT "simplify" this into an add followed by a
+# remove: the window between them is exactly the state this helper exists to rule out.
+#
+# FAILS SOFT, like `publish_recovered_verdict`: no `gh` on PATH, or an edit that errors,
+# warns on stderr and returns 1 — the caller decides what that means (for a verdict it
+# means the draft flip is skipped too). A labels LOOKUP that fails is NOT fatal: we fall
+# back to the unconditional form (add <label>, remove both others), which is correct
+# whatever the issue currently carries. That keeps an unattended recovery working on a
+# flaky network, at the cost of one write that may have been unnecessary.
+set_routing_label() {
+  local repo="$1" issue="$2" label="$3"
+  local labs other present=() args=() rc=0 known=0 l
+
+  for l in $ROUTING_LABELS; do [ "$l" = "$label" ] && known=1; done
+  if [ "$known" -ne 1 ]; then
+    echo "  ⚠ set_routing_label: '$label' is not a routing label ($ROUTING_LABELS) — nothing done" >&2
+    return 1
+  fi
+  if [ -z "$repo" ] || [ -z "$issue" ]; then
+    echo "  ⚠ set_routing_label: need <repo> <issue> — got '${repo}' '${issue}'; \`$label\` NOT applied" >&2
+    return 1
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "  ⚠ gh not on PATH — \`$label\` NOT applied to $repo#$issue" >&2
+    return 1
+  fi
+
+  labs="$(gh issue view "$issue" -R "$repo" --json labels 2>/dev/null \
+          | jq -r '.labels[].name' 2>/dev/null || true)"
+  if [ -n "$labs" ]; then
+    # herestring, never `printf … | grep -q`: grep exits on match and hands the writer an
+    # EPIPE, which under `set -o pipefail` inverts the test (tests/lib/assert.sh header).
+    for other in $ROUTING_LABELS; do
+      [ "$other" = "$label" ] && continue
+      grep -qxF -- "$other" <<<"$labs" && present+=("$other")
+    done
+    if grep -qxF -- "$label" <<<"$labs" && [ "${#present[@]}" -eq 0 ]; then
+      echo "unchanged"   # already the only routing label — no write at all
+      return 0
+    fi
+    args=(--add-label "$label")
+    # bash 3.2: expanding an empty array under `set -u` is a fatal unbound-variable
+    # error, so branch on the count rather than expanding unconditionally (CLAUDE.md).
+    if [ "${#present[@]}" -gt 0 ]; then
+      for other in "${present[@]}"; do args+=(--remove-label "$other"); done
+    fi
+  else
+    # Lookup failed OR the issue genuinely carries no labels — indistinguishable here, so
+    # take the unconditional form. Removing a repo-defined label an issue does not carry
+    # is a clean no-op (verified); removing one the REPO never defined errors, which is
+    # the fail-soft path below.
+    args=(--add-label "$label")
+    for other in $ROUTING_LABELS; do
+      [ "$other" = "$label" ] || args+=(--remove-label "$other")
+    done
+  fi
+
+  gh issue edit "$issue" -R "$repo" "${args[@]}" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "  ⚠ could not route \`$label\` on $repo#$issue (gh issue edit failed) — issue left untouched" >&2
+    return 1
+  fi
+  if [ "${#present[@]}" -gt 0 ]; then
+    echo "applied \`$label\`, cleared \`$(IFS=,; echo "${present[*]}")\`"
+  else
+    echo "applied \`$label\`"
+  fi
+  return 0
+}
+
 # publish_recovered_verdict <verdict-file> <repo> <pr> [issue] [dispatched-at] — perform the
 # routing a checker that died before its last act never got to perform. Prints a one-line
 # note naming what it published (empty when there was nothing to publish).
@@ -626,7 +732,7 @@ verdict_label() {
 # OPEN — a merged/closed PR's verdict is moot.
 publish_recovered_verdict() {
   local vf="$1" repo="$2" pr="$3" issue="${4:-}" dispatched_at="${5:-}"
-  local v label pj rc=0 prstate labs body notes="" mine label_ok=0
+  local v label pj rc=0 prstate body notes="" mine label_ok=0 rl
   v="$(verdict_of "$vf")"
   if [ -z "$v" ]; then printf ''; return 0; fi
   label="$(verdict_label "$v")"
@@ -685,18 +791,19 @@ $(cat "$vf" 2>/dev/null)
     fi
   fi
 
-  # (2) the label — only when the issue does not already carry it.
+  # (2) the label — through set_routing_label, so the verdict's label REPLACES whichever
+  # other routing label the issue is carrying instead of stacking on it (issue #83). Its
+  # own idempotence covers the "already applied" case, so this re-runs clean.
   if [ -n "$issue" ]; then
-    labs="$(gh issue view "$issue" -R "$repo" --json labels 2>/dev/null \
-            | jq -r '.labels[].name' 2>/dev/null || true)"
-    # herestring, never `printf … | grep -q`: grep exits on match and hands the writer an
-    # EPIPE, which under `set -o pipefail` inverts the test (tests/lib/assert.sh header).
-    if grep -qxF -- "$label" <<<"$labs"; then
-      notes="$notes; label \`$label\` already on #$issue"; label_ok=1
-    elif gh issue edit "$issue" -R "$repo" --add-label "$label" >/dev/null 2>&1; then
-      notes="$notes; applied \`$label\` to #$issue"; label_ok=1
+    if rl="$(set_routing_label "$repo" "$issue" "$label")"; then
+      if [ "$rl" = "unchanged" ]; then
+        notes="$notes; label \`$label\` already on #$issue"
+      else
+        notes="$notes; $rl on #$issue"
+      fi
+      label_ok=1
     else
-      echo "  ⚠ could not apply \`$label\` to $repo#$issue — apply it by hand from $vf" >&2
+      echo "    apply it by hand from $vf" >&2
       notes="$notes; FAILED to apply \`$label\` to #$issue"
     fi
   else
