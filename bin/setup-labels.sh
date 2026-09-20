@@ -14,5 +14,10 @@ create needs-definition "fbca04" "Orchestrator verdict: under-specified — your
 create checked-pass     "0e8a16" "Checker passed it (criteria met; any findings are yours to weigh) — your court (review & merge)"
 create hold             "6a737b" "Your pre-emptive 'not ready' — orchestrator skips entirely"
 create blocked          "b60205" "Waiting on something external"
+# Off-board repos only (board: none in the manifest — issue #86). There is no board
+# Status field to promote an issue with, so this label IS the promotion: board-digest.sh
+# treats an off-board issue carrying it as Status "Up Next" (dispatchable) and one
+# without it as "Backlog". Harmless and ignored on a board-sourced repo.
+create up-next          "1d76db" "Off-board stand-in for the board's Status promotion: ready to dispatch (Up Next)"
 
 echo "Orchestrator labels created in $REPO"

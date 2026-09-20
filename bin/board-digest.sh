@@ -7,14 +7,26 @@
 # markdown digest. No LLM, no judgment: the script REPORTS, the orchestrator
 # DECIDES what to dispatch. Safe to run standalone to eyeball board state.
 #
-# Network: 1 board call + 1 `gh search prs` (ready PRs, all repos) +
-# 1 `gh search issues` (close dates, for the Done cap). Local: reads ledger.md, plus
-# ONE `tmux list-panes -a` probe for the ⏳ tmux-live marker (zero GitHub calls).
+# OFF-BOARD MODE (issue #86): a repo can be onboarded to the loop and deliberately
+# absent from the board. `board: none` in projects/<slug>.yml switches that slug's ISSUE
+# SOURCE from board rows to `gh issue list`, and the `up-next` LABEL stands in for the
+# board's Status promotion gate. Everything downstream — every bucket, the PR join, the
+# ledger join, the stale-pass check — is unchanged. Absent (or any other value) keeps
+# today's board-sourced behavior byte-for-byte.
+#
+# Network: 1 board call + 1 `gh pr list` per onboarded repo +
+# 1 `gh search issues` (close dates, for the Done cap), PLUS — in off-board mode only —
+# EXACTLY ONE `gh issue list` per off-board slug (none for a board-sourced slug: its
+# manifest is read off disk and no call is made). Local: reads ledger.md and each
+# projects/<slug>.yml, plus ONE `tmux list-panes -a` probe for the ⏳ tmux-live marker
+# (zero GitHub calls).
 #
 # Env:
-#   DONE_DAYS     how many days back to show closed items (default 7)
-#   DIGEST_SLUG   restrict the digest to a single onboarded repo (same as the
-#                 positional <slug> arg; the arg wins if both are given)
+#   DONE_DAYS      how many days back to show closed items (default 7)
+#   DIGEST_SLUG    restrict the digest to a single onboarded repo (same as the
+#                  positional <slug> arg; the arg wins if both are given)
+#   OFFBOARD_LIMIT max issues fetched per off-board slug (default 200; a full page is
+#                  reported as truncated, never silently dropped)
 #
 # Usage:
 #   ./board-digest.sh              # whole board, scoped to all onboarded repos
@@ -93,7 +105,8 @@ fi
 
 BOARD_FILE="$BOARD_FILE" CLOSED_FILE="$CLOSED_FILE" PR_OWNER="$PR_OWNER" BOARD_LIMIT="$BOARD_LIMIT" \
 OPERATOR_NAME="$OPERATOR_NAME" SCHEDULED_ALLOW="$scheduled_allow" TMUX_LIVE="$tmux_live" \
-LEDGER="$LEDGER" DONE_DAYS="$DONE_DAYS" ONBOARDED_SLUGS="$onboarded_slugs" python3 <<'PY'
+LEDGER="$LEDGER" DONE_DAYS="$DONE_DAYS" ONBOARDED_SLUGS="$onboarded_slugs" \
+PROJECTS_DIR="$ORCH_DIR/projects" OFFBOARD_LIMIT="${OFFBOARD_LIMIT:-200}" python3 <<'PY'
 import json, os, re, subprocess, sys
 from datetime import datetime, timezone, timedelta
 
@@ -158,10 +171,118 @@ tmux_live = {s for s in os.environ.get("TMUX_LIVE", "").split(",") if s}
 def tmux_marker(repo_nwo, num):
     name = f"derail-{(repo_nwo or '').replace('/', '-')}-{num}"
     return f" ⏳ tmux-live {name}" if name in tmux_live else ""
+
+# ---- OFF-BOARD MODE: issues from `gh issue list`, not the board (issue #86) --
+# Dispatch is ALREADY board-free — launch-worker.sh / launch-checker.sh read a manifest,
+# make a worktree and route on ISSUE labels; nothing anywhere reads or writes a board
+# field. The board is this script's dependency alone, which is why a repo that is
+# deliberately not on the board (a personal repo the board's research/teaching/service
+# scope does not cover) needs a change HERE and nowhere else — routing it around the
+# digest instead would mean re-specifying the ledger join, the tmux reconciliation, the
+# stale-pass check and the intake gate as prose for the model to redo every session.
+#
+# `board: none` (case-insensitive) in projects/<slug>.yml selects it. Absent, or any
+# other value, is today's behavior byte-for-byte: no `gh issue list` is made for that
+# slug and its rows still come from the board JSON.
+PROJECTS_DIR = os.environ.get("PROJECTS_DIR", "")
+OFFBOARD_LIMIT = int(os.environ.get("OFFBOARD_LIMIT") or 200)
+UP_NEXT = "up-next"
+
+def manifest_scalar(slug, key):
+    """One scalar field out of projects/<slug>.yml, read with exactly the grammar
+    `yml()` in the launchers uses: the FIRST `^key: value` line wins, a trailing
+    ` #comment` is stripped, and one layer of surrounding quotes is dropped. Purely
+    local — reading a manifest costs no `gh` call."""
+    if not PROJECTS_DIR:
+        return ""
+    try:
+        with open(os.path.join(PROJECTS_DIR, f"{slug}.yml")) as f:
+            for ln in f:
+                m = re.match(rf"^{re.escape(key)}:[ \t]*(.+)$", ln.rstrip("\n"))
+                if m:
+                    return re.sub(r"\s+#.*$", "", m.group(1)).strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+offboard = {s for s in onboarded if manifest_scalar(s, "board").lower() == "none"}
+
+def gh_issue_list(repo):
+    """Open issues for one off-board repo — the board query's stand-in. Returns
+    (issues, error); exactly one is meaningful. A failure of ANY kind (gh absent,
+    unauthenticated, rate-limited, unparseable) must degrade to zero issues plus a
+    VISIBLE note, never abort the digest and never render a silently-empty bucket
+    that reads like 'nothing to do'."""
+    try:
+        r = subprocess.run(
+            ["gh", "issue", "list", "-R", repo, "--state", "open", "--json",
+             "number,title,body,labels", "--limit", str(OFFBOARD_LIMIT)],
+            capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        return [], "`gh` is not on PATH"
+    except Exception as e:
+        return [], f"`gh issue list` could not be run ({type(e).__name__})"
+    if r.returncode != 0:
+        tail = [ln for ln in (r.stderr or "").strip().splitlines() if ln.strip()]
+        detail = f": {tail[-1][:140]}" if tail else ""
+        return [], f"`gh issue list` exited {r.returncode}{detail}"
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        return [], "`gh issue list` returned unparseable output (not JSON)"
+    if not isinstance(data, list):
+        return [], "`gh issue list` returned unexpected JSON (not a list of issues)"
+    return data, None
+
+offboard_rows = []
+offboard_notes = []     # rendered as ⚠ lines under the digest header
+offboard_missing = []   # slugs whose issues could not be fetched AT ALL
+for slug in sorted(offboard):
+    repo = f"{pr_owner}/{slug}" if pr_owner else slug
+    issues, err = gh_issue_list(repo)
+    if err is not None:
+        offboard_missing.append(slug)
+        offboard_notes.append(
+            f"**Off-board repo `{slug}`: its issues are MISSING from this digest.** {err}. "
+            f"Zero of its issues were read, so every bucket below is silent about it — an "
+            f"empty dispatch bucket here means *not fetched*, not *nothing to do*. Fix `gh` "
+            f"and re-run before concluding anything about {slug}.")
+        continue
+    if len(issues) >= OFFBOARD_LIMIT:
+        offboard_notes.append(
+            f"**Off-board repo `{slug}` hit the issue-list page limit ({OFFBOARD_LIMIT}).** "
+            f"Issues past the cut are absent from this digest and read as unlabelled/missing. "
+            f"Re-run with a higher `OFFBOARD_LIMIT` before acting on anything below.")
+    proj = manifest_scalar(slug, "project") or "—"
+    for it in issues:
+        labels = {l.get("name") for l in (it.get("labels") or []) if l.get("name")}
+        offboard_rows.append({
+            "num": it.get("number"),
+            "title": (it.get("title") or "").strip(),
+            "body": it.get("body") or "",
+            # There is no board Status field off-board, so the `up-next` LABEL stands in
+            # for it: present -> "Up Next", absent -> "Backlog". That preserves the
+            # promotion gate `actionable` keys on below; without a stand-in every open
+            # issue in the repo would become a dispatch candidate at once, the exact
+            # opposite of the intake discipline this digest exists to enforce.
+            "status": "Up Next" if UP_NEXT in labels else "Backlog",
+            # `project:` in a manifest was read by no code at all before this; off-board
+            # rows give it its first real use, so their digest lines still carry a tag.
+            "project": proj,
+            "repo_url": f"https://github.com/{repo}",
+            "labels": labels,
+            "offboard": True,
+        })
+
 all_rows = rows
-rows = [r for r in all_rows if is_onboarded(r["repo_url"])]
+# An off-board slug's rows come from `gh issue list` alone. Any board row that somehow
+# exists for it (a leftover, hand-added card) is dropped rather than merged, so one
+# issue can never appear twice with two different Statuses.
+rows = [r for r in all_rows
+        if is_onboarded(r["repo_url"]) and short(r["repo_url"]) not in offboard]
 excluded_rows  = [r for r in all_rows if not is_onboarded(r["repo_url"])]
 excluded_repos = sorted({short(r["repo_url"]) for r in excluded_rows})
+rows.extend(offboard_rows)
 
 def has(r, lab): return lab in r["labels"]
 
@@ -353,6 +474,13 @@ if paused:
     w(f"_Autonomous-dispatch allow-list active — repos marked ⏸ scheduler-paused "
       f"({', '.join(sorted(paused))}) are onboarded but excluded from the cron loop; "
       f"manual launch-*.sh and interactive /orchestrate still work on them._")
+if offboard:
+    w(f"_Off-board repos ({', '.join(sorted(offboard))}) carry `board: none` in their "
+      f"manifest — their open issues are read from `gh issue list`, not the board, and the "
+      f"`{UP_NEXT}` label stands in for board Status `Up Next` (no `{UP_NEXT}` ⇒ Backlog ⇒ "
+      f"not a dispatch candidate). Everything else about them is identical._")
+for _note in offboard_notes:
+    w(f"> ⚠ {_note}")
 w()
 
 # ---- classify open PRs into review-pipeline buckets -------------------------
@@ -542,7 +670,16 @@ if unrouted:
     # issue to the board or dispatches by hand.
     w(f"**⚠ worker's court, not dispatchable — closing issue not on the board ({len(unrouted)}):**")
     for pr in unrouted:
-        w(pr_line(pr, "  ⚠ no board row for its closing issue — add it to the board, or dispatch by hand"))
+        if short_repo(pr["repo"]) in offboard:
+            # Off-board there IS no board row to add, so the honest read is "no OPEN
+            # issue matched its closing reference" — the issue is closed, or the PR
+            # never declared one. Telling the operator to add it to the board would be
+            # advice they cannot act on (and, for an issue we DID find, a permanent
+            # false alarm — the #85 failure mode).
+            w(pr_line(pr, "  ⚠ no OPEN issue matches its closing reference (off-board repo — "
+                          "the issue may be closed, or the PR declares no `Closes #N`) — dispatch by hand"))
+        else:
+            w(pr_line(pr, "  ⚠ no board row for its closing issue — add it to the board, or dispatch by hand"))
 # Each actionable candidate carries its acceptance criteria so the orchestrator
 # can apply the intake gate from the digest alone (dig deeper only if unsure).
 w(f"**actionable, no open PR (Up Next / In Progress) ({len(actionable)}):**")
@@ -553,6 +690,10 @@ if actionable:
             w(ex)
 else:
     w("- none")
+if offboard_missing:
+    w(f"_⚠ This bucket says NOTHING about {', '.join(offboard_missing)}: their issues could "
+      f"not be fetched (see the ⚠ under the header). Do not read the count above as their "
+      f"queue being empty._")
 w()
 
 # ---- IN REVIEW (PR pipeline — the loop's court, not the operator's, not dispatch) --

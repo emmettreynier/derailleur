@@ -1,0 +1,45 @@
+# Per-project manifest — the onboarding unit. Read by the raw-data deny-hook and the
+# dispatch tooling.
+#
+# THE FIRST OFF-BOARD MANIFEST (issue #86). This repo is deliberately NOT on Research
+# Board #3: the board is scoped to research, teaching and service, and a personal
+# finance repo does not belong on it (the board hook excludes it by name). `board: none`
+# below tells bin/board-digest.sh to read this repo's open issues from
+# `gh issue list -R emmettreynier/financial-planning` instead of from board rows —
+# one extra `gh` call per digest run, and nothing else in the loop changes. Dispatch was
+# already board-free: launch-worker.sh / launch-checker.sh read this manifest, make a
+# worktree and route on ISSUE labels, never on a board field.
+#
+# TRACKED, unlike every other manifest (projects/*.yml is gitignored, with a negation
+# for this one file). It is the worked example the `board: none` docs point at, and it
+# carries no machine-specific absolute path — only `~`-relative ones. See the PR for
+# issue #86 if you would rather it went back to being machine-local.
+
+repo: emmettreynier/financial-planning
+project: Personal               # off-board: this IS the tag the digest renders
+board: none                     # OFF-BOARD — issues come from `gh issue list`, not the board
+archetype: git-native
+
+# Worker git workspace. The repo is already outside any cloud-sync folder.
+working_clone: ~/Documents/financial-planning
+worktrees_dir: ~/Documents/financial-planning-work/worktrees
+
+# data_root is the REPO ROOT, not data/. Both raw_paths and output_paths resolve
+# against it (host/hooks/raw-data-guard.py), and `dr tmux-run` writes its durable log to
+# <data_root>/logs/ — so rooting this at data/ would resolve output/ to data/output/ AND
+# drop the tmux log inside the deny-hook-protected raw tree.
+data_root: ~/Documents/financial-planning
+raw_resolved: ~/Documents/financial-planning/data
+dropbox_pinned_offline: false
+
+# READ-ONLY. The repo's own AGENTS.md hard rule: code reads data/, never writes there.
+# NOTE: worktrees are NOT provisioned with the real account data — deciding whether a
+# worker should see it at all is a separate call (issue #86 non-goals), so workers here
+# run dataless until then. The deny-hook blocks WRITES under data/; it does not gate
+# reads, and it does not stop a commit of data that is already present.
+raw_paths:
+  - data/
+
+# Writable worker outputs (AGENTS.md: all outputs go to output/).
+output_paths:
+  - output/
