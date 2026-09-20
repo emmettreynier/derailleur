@@ -347,8 +347,9 @@ board-sourced behavior byte-for-byte — no extra call is made for that slug. A 
 digest (`dr board-digest` with no slug) renders board-sourced and off-board repos in one
 report. If `gh issue list` fails for an off-board slug, the digest says so in two places
 (under the header and inside the dispatch bucket) and completes; it never lets a
-fetch failure read as an empty queue. `projects/financial-planning.yml` is the worked
-example — the one tracked manifest, kept for exactly that purpose.
+fetch failure read as an empty queue. `templates/project.yml` documents the `board:`
+key and carries the worked `board: none` example; like every manifest, the real
+`projects/<slug>.yml` stays machine-local and untracked.
 
 ### Enable the scheduled loop (optional)
 
