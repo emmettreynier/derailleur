@@ -83,6 +83,16 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   pins all three against each other and against expected values; it reaches the real
   parsers by import + heredoc extraction, so restructuring `yml_list()` out of its
   `<<'PY'` heredoc fails that test loudly rather than silently stopping the comparison.
+- The manifest **scalar** grammar now has a third implementation: `yml()` in both
+  launchers (sed) and `manifest_scalar()` inside `bin/board-digest.sh`'s python heredoc
+  (added for `board:`/`project:`, issue #86). It is a deliberate mirror — first
+  `^key: value` line wins, a ` #comment` tail is stripped, one layer of quotes dropped —
+  so change it with the launchers, not on its own. (The *list* grammar's three
+  implementations are pinned against each other by
+  `tests/offline/test-manifest-parser-conformance.sh`; the scalar one is not, because
+  nothing safety-relevant reads a scalar through it — `board:` only picks an issue
+  source, and a misparse there shows up as a visibly wrong digest, not a silent
+  write-protection hole.)
 - **Routing labels (`checked-pass` / `resume` / `needs-input`) are mutually exclusive, and
   `set_routing_label` in `bin/dispatch-common.sh` is the ONLY thing in `bin/` allowed to
   write one.** They encode whose court the work is in, so applying one must clear the other

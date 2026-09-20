@@ -14,7 +14,32 @@ and resolve every `TODO:` before the first real dispatch.
 # dispatch tooling. Scaffolded by new-project.sh — FILL THE TODOs before first dispatch.
 
 repo: {{REPO}}                  # owner/repo the worker/checker operate on
-project: TODO                   # board "Project" field value (e.g. Water/Pesticides/Climate/Energy/Other)
+project: TODO                   # "Project" tag on the repo's digest lines. For a board-sourced
+                                # repo this documents the board's Project field (the digest reads
+                                # the live value off the board); for an OFF-BOARD repo (below) it
+                                # is the tag the digest actually renders.
+
+# board: OPTIONAL. Where board-digest.sh reads this repo's ISSUES from.
+#   unset / anything else  the cross-repo board (BOARD_PROJECT in orchestrator.conf).
+#                          Today's behavior, byte-for-byte.
+#   none                   OFF-BOARD: issues come from `gh issue list -R <repo>` instead,
+#                          one call per run (issue #86).
+#
+# Use it for a repo that is deliberately NOT on the board — a personal repo the board's
+# research/teaching/service scope does not cover. Dispatch is already board-free (the
+# launchers read this manifest and route on ISSUE labels; nothing reads or writes a board
+# field), so `board: none` is the whole difference.
+#
+# ⚠ THE PROMOTION GATE CHANGES. Board-sourced repos are dispatchable only at Status
+# "In Progress"/"Up Next". Off-board there is no Status field, so the `up-next` LABEL
+# stands in: an issue carrying it reads as "Up Next" (a dispatch candidate), one without
+# it as "Backlog". `bin/setup-labels.sh` creates the label. Without adding `up-next` to an
+# issue, an off-board repo dispatches nothing — that is the intake gate working, not a bug.
+#
+# NOT a scheduler opt-in: off-board says nothing about autonomous dispatch. Keep the repo
+# out of `state/scheduled-repos` (`dr schedule enable/disable`) if you want /orchestrate
+# and manual launches only.
+#   board: none
 
 # archetype — how the repo relates to its data (see README "Onboard a project"):
 #   git-native      (preferred) repo is git-only and lives OUTSIDE any cloud-sync

@@ -111,6 +111,21 @@ A deterministic script `bin/board-digest.sh` (`gh project item-list 3 --owner @m
 
 The digest is injected via an **env-gated `SessionStart` hook** (`ORCHESTRATOR=1`) so the orchestrator boots pre-loaded with board state and zero tool calls — and so it never fires in your normal interactive sessions. The script **reports**; the orchestrator **decides** what to dispatch (judgment stays in the model).
 
+### Off-board repos — `board: none` *(issue #86, 2026-09-20)*
+
+**The board is the digest's dependency, not the loop's.** `launch-worker.sh` and `launch-checker.sh` read a manifest, make a worktree and route on **issue labels**; no script in `bin/`, `host/` or `briefs/` ever reads or writes a board field, and `project:` in a manifest was read by no code at all. So a repo that is deliberately *not* on the board — a personal repo the board's research/teaching/service scope does not cover — was already fully dispatchable; it was just **invisible**, because `bin/board-digest.sh` sourced issues from board rows alone and `/orchestrate` on it was therefore inert.
+
+`board: none` (case-insensitive) in `projects/<slug>.yml` switches that slug's **issue source** to `gh issue list -R <repo>` — one call per off-board slug, zero for a board-sourced one — and synthesises the same row dict the rest of the script already consumes. Every bucket, the PR↔issue join, the ledger join, the `⏳ tmux-live` marker, the stale-pass check (#83), the `✍ operator-directive` marker (#77), `spec_excerpt` and the footer are untouched and must stay that way.
+
+Two consequences are load-bearing:
+
+- **The promotion gate needs a stand-in.** There is no Status field off-board, so the **`up-next` label** is it: present ⇒ `Up Next`, absent ⇒ `Backlog`. Without a stand-in, `actionable`'s `status in ("In Progress", "Up Next")` test passes for *every* open issue in the repo at once — the exact opposite of the intake discipline the digest exists to enforce. The filter itself is applied **verbatim**, never special-cased for off-board rows.
+- **A fetch failure must be louder than an empty bucket.** `gh issue list` failing (absent, unauthenticated, rate-limited, unparseable) degrades to zero issues for that slug, which renders a dispatch bucket indistinguishable from "nothing to do". It is therefore reported **twice** — a ⚠ line under the digest header naming the actual `gh` error, and a disclaimer inside the dispatch-candidates bucket itself — and never aborts the run.
+
+**Why here and not in `/orchestrate`.** Branching in the command's prose would mean re-specifying the ledger join, tmux reconciliation, the stale-pass check and the intake gate as instructions for the model to redo by hand every session — which is precisely the judgment this deterministic script exists to take away from the LLM. `templates/orchestrate.command.md` and both launchers are unchanged.
+
+Off-board says nothing about autonomous dispatch: the slug is still governed by `state/scheduled-repos` (`dr schedule enable/disable`) like any other, and the deny-hook, `--add-dir` scoping, the draft/ready protocol and the human merge gate all apply unchanged.
+
 ## State & durability
 
 - **Truth:** GitHub (issues/PRs/labels/comments/board).
@@ -265,6 +280,7 @@ The determinism of the whole loop rests on these. Digest script keys on:
 - `needs-definition` — the orchestrator's verdict after evaluating: under-specified; your court (author criteria).
 - `hold` — *your* pre-emptive "not ready, don't dispatch." The digest **hard-excludes** it (no orchestrator judgment). Chains with the above: `hold` while you draft → remove it → orchestrator then either dispatches or bounces with `needs-definition`.
 - `blocked` — waiting on something external.
+- `up-next` — **off-board repos only** (`board: none`; see *Off-board repos* below). Stands in for the board's Status promotion: an off-board issue carrying it reads as Status `Up Next` (dispatchable), one without it as `Backlog`. Inert and ignored on a board-sourced repo.
 - *Work vs review* is carried by **PR draft/ready state**, not a label.
 
 ### The three routing labels are mutually exclusive *(issue #83, 2026-09-18)*
