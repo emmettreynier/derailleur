@@ -131,7 +131,19 @@ published on a PR that already carries a round-1 verdict comment, while a commen
 reconciler cannot post routes nothing at all — no label, no draft flip; an unowned verdict
 JSON in `logs/` is reported only when its label never landed, and the sweep's own local
 dead ends are named rather than swallowed; and an entry pruned while still non-terminal
-names its log and whether a verdict file was found), plus the
+names its log and whether a verdict file was found); the **verdict sweep's retirement**
+and `ledger-prune.sh --dry-run` (an unowned verdict whose PR is confirmed closed/merged is
+moved into `logs/archive/` **with its `.prev.json` sibling** and the sweep says how many it
+retired; an open-PR file is left — reported clean when its label landed, and still raising
+the `⚠ UNROUTED VERDICT` finding when it did not; a ledger-**owned** file is never touched
+on any PR state; a failing `gh` *and* a zero-exit `gh` returning unparseable JSON each
+retire nothing; a re-run of a drained set retires nothing and never re-sweeps the archive;
+`--dry-run` leaves `logs/` byte-identical, creates no `logs/archive/`, leaves the ledger
+unchanged, and reports a selection that is line-for-line the real run's once the
+`[dry-run] ` tag is stripped; the reworded truncation note reports the count, states the
+sweep is newest-first so the untouched files are the oldest, says the backlog drains, and
+is silent when it fits in the window; and an unknown flag exits 2 instead of becoming a
+live run), plus the
 split no-clean-finish escalation (trailing `**Worker incomplete: incomplete-waiting`
 comments count against the loose `WORKER_WAIT_LIMIT`; every `**Worker interrupted:` and
 every other incomplete reason — `incomplete-conflicting` included — against
@@ -602,7 +614,7 @@ derailleur/
 │   ├── launch-orchestrator.sh     Boot an (interactive or scheduled) orchestrator session
 │   ├── dispatch-common.sh         Shared post-run helpers, sourced by both launchers
 │   ├── config-common.sh           Loads operator identity from orchestrator.conf (sourced)
-│   ├── ledger-prune.sh            Reconcile, then drop, stale ledger entries at cycle start
+│   ├── ledger-prune.sh            Reconcile, then drop, stale ledger entries at cycle start (`--dry-run` to plan)
 │   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees (+ reap dead derail-* tmux sessions)
 │   ├── board-digest.sh            Deterministic board-state report (no LLM)
 │   ├── watch-dispatch.sh          Watch dispatched worker(s)/checker(s) to terminal state (local signals; no LLM)

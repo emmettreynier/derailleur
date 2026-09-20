@@ -851,9 +851,16 @@ $(cat "$vf" 2>/dev/null)
 # predecessor in place, so no verdict history survives across rounds today; moving instead
 # of deleting costs nothing and leaves one MORE local generation than exists now — exactly
 # the one that matters when a fresh checker crashes before its first write. A single slot,
-# not a timestamped archive: nothing prunes logs/, and the checker's PR comment carries the
-# full verdict JSON, so GitHub is the durable history. Do not "simplify" this back to a
-# delete, and do not let it grow a timestamped archive.
+# not a timestamped archive, and the checker's PR comment carries the full verdict JSON, so
+# GitHub is the durable history. Do not "simplify" this back to a delete, and do not let it
+# grow a timestamped archive.
+#
+# LIFECYCLE, as of issue #85: `ledger-prune.sh`'s verdict sweep now RETIRES a verdict file
+# (and this `.prev.json` sibling with it) into `logs/archive/` once it is unowned by any
+# ledger entry AND its PR is confirmed closed/merged — so the claim this comment used to
+# make, that "nothing prunes logs/", is no longer true of verdict files. It remains true of
+# every other file in logs/ (session logs, the cycle log). That retirement is deliberately a
+# `mv`, not an `rm`, for the same reason this rotation is.
 #
 # watch-dispatch.sh reads ONLY the canonical path — `.prev.json` is deliberately invisible
 # to it, so its verdict-file-wins precedence is untouched by this.

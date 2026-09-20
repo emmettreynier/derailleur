@@ -13,11 +13,45 @@
 #   1. RECONCILE  — every dead-pid entry that never reached a terminal status gets the
 #      finalization its own session never ran (see reconcile_dead_dispatches below).
 #   2. SWEEP      — every verdict JSON in logs/ that no ledger entry owns is checked for
-#      an unapplied routing label and reported.
+#      an unapplied routing label and reported; one whose PR is confirmed closed/merged
+#      is RETIRED into logs/archive/ so the unowned set drains instead of growing (#85).
 #   3. PRUNE      — the original drop pass, now downstream of both, so nothing is deleted
 #      before the evidence on disk has been read.
+#
+# --dry-run: plan only. NOTHING is mutated — no verdict file retired, no ledger line
+# rewritten, no GitHub comment or label written. It exists because phase 2 grew a
+# destructive act (retirement, below) and a housekeeping script that runs unattended
+# every cycle should be inspectable before it is trusted. It is script-WIDE rather than
+# scoped to the retirement on purpose: a flag named `--dry-run` that still posted a
+# countable escalation comment and rewrote the ledger would be a trap.
 set -euo pipefail
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+DRY_RUN=0
+_usage() {
+  cat <<'USAGE'
+usage: ledger-prune.sh [--dry-run]
+
+  Reconcile, sweep and prune the ledger (see the header comment for the three phases).
+
+  --dry-run   plan only: report what each phase would do and mutate nothing —
+              no verdict file retired, no ledger rewrite, no GitHub write.
+USAGE
+}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    -h|--help) _usage; exit 0 ;;
+    *) echo "ledger-prune: unknown argument '$1'" >&2; _usage >&2; exit 2 ;;
+  esac
+  shift
+done
+# The one prefix every dry-run line carries. Kept as a variable, not sprinkled inline, so
+# a dry-run line is byte-identical to its real counterpart once the prefix is stripped —
+# which is exactly what tests/offline/test-verdict-sweep.sh asserts about the SELECTION.
+DRY_TAG=""
+if [ "$DRY_RUN" = 1 ]; then DRY_TAG="[dry-run] "; fi
+
 source "$ORCH/bin/config-common.sh"   # GITHUB_HANDLE (escalation @-mention)
 # reconciled_status / report_no_clean_finish / verdict_of / verdict_label /
 # publish_recovered_verdict — the finalization a killed session never got to run.
@@ -169,6 +203,17 @@ for ln in open(os.environ["LEDGER"]).read().splitlines():
 RECON
 )"
   [ -n "$targets" ] || return 0
+  # Dry run stops here: reconcile_entry writes the ledger line, pushes stranded commits,
+  # posts countable comments and applies routing labels. Name the entries instead.
+  if [ "$DRY_RUN" = 1 ]; then
+    while IFS="$(printf '\t')" read -r kind num repo branch log pid status dispatched_at <&3; do
+      [ -n "$kind" ] || continue
+      echo "ledger-prune: ${DRY_TAG}would reconcile $kind $repo#$num — pid $pid dead, status still \`$status\`" >&2
+    done 3<<PLAN
+$targets
+PLAN
+    return 0
+  fi
   # The heredoc is on fd 3, not stdin: reconcile_entry shells out to git/gh, and a child
   # that reads stdin would eat the rest of the target list.
   while IFS="$(printf '\t')" read -r kind num repo branch log pid status dispatched_at <&3; do
@@ -187,10 +232,12 @@ TARGETS
 # failure: a complete review sitting in logs/, no label, nothing pointing at it. This sweep
 # makes that case DETECTABLE.
 #
-# It REPORTS ONLY, deliberately: with no ledger entry there is no dispatch context (which
+# It NEVER ROUTES, deliberately: with no ledger entry there is no dispatch context (which
 # generation, whether a later round superseded it), so applying a label off a file of unknown
 # vintage could re-open a PR the operator already handled. Read the warning, then apply it by
-# hand or re-check the PR.
+# hand or re-check the PR. Its one non-reporting act is RETIREMENT (issue #85, below) — and
+# that touches only files whose PR is confirmed closed, i.e. exactly the ones it would
+# otherwise have nothing whatever to say about.
 #
 # Runs BEFORE the prune pass, so "no ledger entry owns it" covers both a still-live entry and
 # one this run just reconciled. Two filters keep it signal, not noise — every verdict from
@@ -199,6 +246,9 @@ TARGETS
 #   * the closing issue must NOT already carry the label the verdict routes to (i.e. the
 #     outcome never landed). A `gh` lookup that fails leaves it unreported — silence on an
 #     uncertain network, like the rest of this script.
+# The first of those two filters is no longer only a filter: a non-OPEN PR now means RETIRE,
+# not merely skip (issue #85) — see the retirement block below for why, and for why a `gh`
+# lookup that FAILS still retires nothing.
 # Its own dead ends, though, are REPORTED rather than skipped (issue #63 round 2): no manifest
 # for the slug, no `gh` on PATH, and a JSON with no `issue` field are all permanent LOCAL
 # conditions that never resolve on a later run, so swallowing them would make a detectability
@@ -207,14 +257,102 @@ TARGETS
 # as "checked everything".
 VERDICT_SWEEP_LIMIT="${VERDICT_SWEEP_LIMIT:-25}"
 
+# ── retirement: drain the swept set instead of only counting it (issue #85) ───
+# THE PROBLEM. Nothing ever removed a verdict file — `rotate_verdict_file` only ever
+# `mv`s one into a single `.prev.json` slot — so the unowned set grew monotonically
+# (89 files in ~2 months, ~45/month) while the sweep's window stayed fixed at 25. Every
+# cycle therefore printed a truncation warning whose number only ever climbs, on the SAME
+# stderr channel as the genuine `⚠ UNROUTED VERDICT` finding. Measured against the live
+# board on 2026-09-19, all 62 skipped files belonged to closed PRs — i.e. the warning was
+# a standing false alarm, and training yourself to scroll past it is training yourself to
+# scroll past the real finding. The residual correctness risk is narrow but widens with
+# the corpus: a long-lived OPEN PR whose verdict is old enough to sit past position 25.
+#
+# THE FIX. The sweep already calls `gh pr view` and already knows the PR is not open
+# (the `continue` below) — it just threw that knowledge away. Retiring the file instead
+# turns VERDICT_SWEEP_LIMIT from a truncation that loses coverage into a per-cycle DRAIN
+# RATE: the unowned set shrinks until only open-PR verdicts remain, a naturally bounded
+# set, and the warning stops firing on its own.
+#
+# WHY A MOVE INTO logs/archive/ AND NOT AN `rm` (the issue allows either). Three reasons,
+# in order of weight:
+#   1. This runs UNATTENDED at the head of every cycle. The selection rule is safe by
+#      construction (see below), but a bug in a selection rule guarded by an `rm` destroys
+#      the only local copy of a completed review before anyone can read the log that says
+#      it happened; a bug guarded by a `mv` is a `mv` back. That asymmetry is the whole
+#      argument — same instinct as `rotate_verdict_file`'s "do not simplify this back to a
+#      delete", and the same instinct as worktree-prune refusing to touch unmerged work.
+#   2. It solves the stated problem completely anyway. The sweep globs `logs/*-verdict.json`,
+#      which does not recurse, so an archived file is out of the working set for every
+#      purpose this issue is about — the `ls -t`, the window, the warning.
+#   3. Deleting is still available and is now a one-liner for the operator
+#      (`rm -rf logs/archive`), taken deliberately rather than by a script at 2am. Disk is
+#      not the pressure here: 89 verdict JSONs are ~3 MB.
+# Nothing is lost either way: the checker posts the full verdict JSON as a PR comment, so
+# GitHub is the durable history — the same argument rotate_verdict_file already makes.
+#
+# SAFE BY CONSTRUCTION. Only files the sweep already reaches are retired: UNOWNED (no
+# ledger entry names the key, so neither reconcile_dead_dispatches nor watch-dispatch.sh
+# can be reading one) AND confirmed non-`OPEN` by a SUCCESSFUL `gh pr view`. A failed or
+# unparseable lookup retires nothing and stays silent-and-retry, exactly as before — the
+# uncertain-network rule the rest of this script follows.
+VERDICT_ARCHIVE="${VERDICT_ARCHIVE:-$ORCH/logs/archive}"
+
+# retire_verdict_file <file> <why> -> 0 if the canonical file was retired, 1 if not.
+# Adds the number of FILES it moved (1, or 2 with a rotated sibling) to _RETIRED_N — the
+# sweep reports files rather than pairs, because that is what the operator sees in logs/.
+# The `.prev.json` sibling goes with it: leaving rotated slots behind after their canonical
+# file is gone is how the NEXT unbounded pile starts.
+#
+# The counter is a script-level global rather than a return value because the caller runs
+# inside a `while … done 3<<FILES` loop, which is NOT a subshell — an assignment made here
+# survives, while shelling out to capture a count would not be worth the fork.
+_RETIRED_N=0
+retire_verdict_file() {
+  local f="$1" why="$2" prev base rc=0
+  base="$(basename "$f")"
+  prev="${f%.json}.prev.json"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "ledger-prune: ${DRY_TAG}retire $base — $why" >&2
+    _RETIRED_N=$((_RETIRED_N + 1))
+    if [ -f "$prev" ]; then
+      echo "ledger-prune: ${DRY_TAG}retire $(basename "$prev") — rotated sibling of $base" >&2
+      _RETIRED_N=$((_RETIRED_N + 1))
+    fi
+    return 0
+  fi
+  if ! mkdir -p "$VERDICT_ARCHIVE" 2>/dev/null; then
+    echo "⚠ cannot create $VERDICT_ARCHIVE — leaving $base in place" >&2
+    return 1
+  fi
+  if ! mv -f "$f" "$VERDICT_ARCHIVE/$base" 2>/dev/null; then
+    echo "⚠ could not retire $base into $VERDICT_ARCHIVE — left in place" >&2
+    return 1
+  fi
+  echo "ledger-prune: retire $base — $why" >&2
+  _RETIRED_N=$((_RETIRED_N + 1))
+  if [ -f "$prev" ]; then
+    if mv -f "$prev" "$VERDICT_ARCHIVE/$(basename "$prev")" 2>/dev/null; then
+      echo "ledger-prune: retire $(basename "$prev") — rotated sibling of $base" >&2
+      _RETIRED_N=$((_RETIRED_N + 1))
+    else
+      echo "⚠ retired $base but could not retire its $(basename "$prev") — retire it by hand" >&2
+      rc=1
+    fi
+  fi
+  return $rc
+}
+
 sweep_unowned_verdicts() {
-  local files f key slug pr repo v label issue prstate labs n=0 skipped=0 found=0
+  local files f key slug pr repo v label issue prstate labs n=0 skipped=0 found=0 unowned=0
+  _RETIRED_N=0
   files="$(ls -t "$ORCH"/logs/*-verdict.json 2>/dev/null || true)"   # newest first
   [ -n "$files" ] || return 0
   while IFS= read -r f <&3; do        # fd 3, not stdin — the gh calls below inherit stdin
     [ -n "$f" ] || continue
     key="$(basename "${f%-verdict.json}")"            # <slug>-pr-<n>
     grep -qF "$key.log" "$LEDGER" 2>/dev/null && continue   # a ledger entry owns it
+    unowned=$((unowned + 1))
     n=$((n + 1))
     if [ "$n" -gt "$VERDICT_SWEEP_LIMIT" ]; then skipped=$((skipped + 1)); continue; fi
     v="$(verdict_of "$f")"
@@ -244,7 +382,15 @@ sweep_unowned_verdicts() {
       found=$((found + 1)); continue
     fi
     prstate="$(gh pr view "$pr" -R "$repo" --json state 2>/dev/null | jq -r '.state // empty' 2>/dev/null || true)"
-    [ "$prstate" = "OPEN" ] || continue
+    if [ "$prstate" != "OPEN" ]; then
+      # Empty = the lookup failed or returned something unparseable. That is an uncertain
+      # NETWORK, not a closed PR, and it must retire nothing: the next cycle re-reads it.
+      # Only a successful, parsed, non-OPEN state is grounds for retirement (issue #85).
+      if [ -n "$prstate" ]; then
+        retire_verdict_file "$f" "$repo#$pr is $prstate" || true
+      fi
+      continue
+    fi
     issue="$(jq -r '.issue // empty' "$f" 2>/dev/null || true)"
     if [ -z "$issue" ]; then
       echo "⚠ unowned verdict file $f: verdict \`$v\` on open $repo#$pr, but the JSON names no \`issue\`" >&2
@@ -261,8 +407,18 @@ sweep_unowned_verdicts() {
   done 3<<FILES
 $files
 FILES
+  if [ "$_RETIRED_N" -gt 0 ]; then
+    echo "ledger-prune: ${DRY_TAG}verdict sweep retired $_RETIRED_N closed-PR verdict file(s) to ${VERDICT_ARCHIVE#$ORCH/}/" >&2
+  fi
+  # The truncation note, reworded (issue #85). It used to read as "coverage was lost" and
+  # fired every single cycle with a number that only climbed, on the same channel as the
+  # real ⚠ finding above. Two facts make it honest and self-liquidating: the sweep is
+  # newest-first, so what goes unchecked is always the OLDEST (and old correlates with
+  # closed, which is exactly what is now being drained); and the backlog shrinks by up to
+  # VERDICT_SWEEP_LIMIT per cycle, so a fully drained backlog prints nothing at all.
   if [ "$skipped" -gt 0 ]; then
-    echo "ledger-prune: verdict sweep stopped at VERDICT_SWEEP_LIMIT=$VERDICT_SWEEP_LIMIT — $skipped older verdict file(s) NOT checked" >&2
+    echo "ledger-prune: verdict sweep checked the $VERDICT_SWEEP_LIMIT newest of $unowned unowned verdict file(s) (VERDICT_SWEEP_LIMIT=$VERDICT_SWEEP_LIMIT); $skipped older one(s) not checked this cycle." >&2
+    echo "    The sweep is newest-first, so the untouched files are the OLDEST — verdicts on long-closed PRs. Closed-PR files are retired as they are reached, so this backlog drains at up to $VERDICT_SWEEP_LIMIT/cycle and this line stops once it is empty." >&2
   fi
   [ "$found" -gt 0 ] && echo "ledger-prune: $found unowned verdict file(s) reported above" >&2
   return 0
@@ -273,10 +429,13 @@ sweep_unowned_verdicts
 
 # ── phase 3: the prune pass ───────────────────────────────────────────────────
 
-LEDGER="$LEDGER" GITHUB_HANDLE="$GITHUB_HANDLE" ORCH="$ORCH" python3 <<'PY'
+LEDGER="$LEDGER" GITHUB_HANDLE="$GITHUB_HANDLE" ORCH="$ORCH" DRY_RUN="$DRY_RUN" \
+python3 <<'PY'
 import json, os, re, subprocess, sys
 
 ledger = os.environ["LEDGER"]
+DRY = os.environ.get("DRY_RUN") == "1"
+DRY_TAG = "[dry-run] " if DRY else ""
 lines = open(ledger).read().splitlines()
 
 def _gh_state(kind, repo, num):  # kind = "issue" | "pr"
@@ -539,16 +698,22 @@ for ln in lines:
     if reasons and status and status.startswith(("interrupted", "incomplete")):
         reasons.append(f"⚠ was {status} — check worktree for unpushed work")
         if not is_checker:
-            note = handle_no_clean_finish(repo, num)
-            if note:
-                reasons.append(note)
+            # handle_no_clean_finish posts a countable escalation comment and applies a
+            # routing label — both GitHub writes, so a dry run must not reach it.
+            if DRY:
+                reasons.append("(dry-run: no-clean-finish handling not run)")
+            else:
+                note = handle_no_clean_finish(repo, num)
+                if note:
+                    reasons.append(note)
     (pruned if reasons else keep).append((ln, reasons) if reasons else ln)
 
-with open(ledger, "w") as f:
-    f.write("\n".join(keep) + ("\n" if any(l.strip() for l in keep) else ""))
+if not DRY:
+    with open(ledger, "w") as f:
+        f.write("\n".join(keep) + ("\n" if any(l.strip() for l in keep) else ""))
 
 for ln, why in pruned:
-    sys.stderr.write(f"pruned: {ln.strip()}  ({', '.join(why)})\n")
+    sys.stderr.write(f"{'would prune' if DRY else 'pruned'}: {ln.strip()}  ({', '.join(why)})\n")
 live = sum(1 for l in keep if re.search(r"#\d+\s*\|", l))
-print(f"ledger-prune: kept {live} live, pruned {len(pruned)}")
+print(f"ledger-prune: {DRY_TAG}kept {live} live, pruned {len(pruned)}")
 PY
