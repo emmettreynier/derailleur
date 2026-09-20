@@ -181,7 +181,24 @@ does not; a ready `checked-pass` PR whose head commit is NEWER than the newest
 `**Checker verdict:` comment — or which has no such comment at all — is demoted out of
 merge-ready into a named **⚠ STALE PASS** bucket that reports both timestamps, while one
 whose head predates its verdict stays merge-ready and one with no commit/comment data at
-all abstains to the pre-#83 behavior; and every case makes the same three `gh` calls); and
+all abstains to the pre-#83 behavior; and every case makes the same three `gh` calls);
+`board-digest.sh`'s **off-board mode** (`board: none`, issue #86) against a `gh` shim that
+serves per-repo issue and PR payloads — an `up-next` off-board issue is a dispatch
+candidate carrying its criteria and its manifest `project:` tag while one without the
+label collapses to Backlog (the promotion gate, the thing that silently turns every open
+issue into a candidate if it breaks); `hold`/`blocked`/`needs-definition`/an open PR/a
+live ledger entry all exclude it through the *existing* filter, and `up-next` +
+`needs-input` stays actionable exactly as the board-sourced equivalent does (the filter is
+applied verbatim, not special-cased); `needs-input`/`needs-definition`/`resume` reach their
+operator- and worker-court buckets; a draft PR routes as its issue row and a ready one to
+the checker **without** raising the `closing issue not on the board` ⚠, while a PR closing
+an issue that is not open still is reported (with off-board wording); a mixed board +
+off-board digest renders both and raises that ⚠ zero times; a failing and an unparseable
+`gh issue list` each degrade to a visible note under the header *and* inside the dispatch
+bucket rather than an empty list that reads like "nothing to do", while a genuinely empty
+repo is not reported as a failure; `board: NONE` is accepted case-insensitively; and the
+non-regression half — an absent `board:` key and a non-`none` value render **byte-identically**
+and make **zero** `gh issue list` calls, with the whole run's call count unchanged; and
 **manifest-parser conformance** — the deny-hook (`host/hooks/raw-data-guard.py`) and the launchers'
 `yml_list()` are two implementations of one manifest grammar, and when they disagree
 the hook silently drops a declared
@@ -288,6 +305,50 @@ authentication, and coauthor buy-in for shared-repo branch protection.
 > onboarding alone doesn't put a repo on the cron budget. (With no allow-list set —
 > the default — onboarding is enough; every onboarded repo dispatches autonomously.)
 > Manual `dr launch-worker <slug> <issue#>` works immediately either way.
+
+### Onboard an **off-board** repo (`board: none`)
+
+Some repos have no business on the board. Mine is scoped to research, teaching and
+service, and a personal-finance repo does not belong on it — but I still want the loop:
+`/orchestrate`, workers, checkers, the merge gate.
+
+That needs one manifest line, because **dispatch was already board-free**. The launchers
+read a manifest, make a worktree and route on **issue labels**; nothing anywhere reads or
+writes a board field. `bin/board-digest.sh` was the only board dependency, and only for
+its *issue source*.
+
+```yaml
+# projects/<slug>.yml
+board: none                     # issues come from `gh issue list`, not the board
+project: Personal               # off-board, this IS the tag the digest renders
+```
+
+Then the one thing that genuinely changes — **how an issue becomes dispatchable**:
+
+| | board-sourced repo | off-board repo |
+|---|---|---|
+| issue source | board rows (1 board query for all repos) | `gh issue list -R <repo>` (1 call per off-board slug) |
+| promotion gate | board Status `Up Next` / `In Progress` | the **`up-next` label** (absent ⇒ Backlog ⇒ not dispatchable) |
+| project tag | the board's Project field | the manifest's `project:` value |
+| everything else | — | identical: same buckets, same PR join, same ledger join, same stale-pass check, same intake gate |
+
+So: `gh issue edit <n> -R <owner/repo> --add-label up-next` is the off-board equivalent of
+dragging a card to **Up Next**. `bin/setup-labels.sh` creates the label (re-run it on an
+already-onboarded repo to add it; it is `--force`-idempotent). Until an issue carries
+`up-next`, the repo dispatches nothing — that is the intake gate working, not a bug.
+
+Two things it does *not* change. It is **not** a scheduler opt-in (keep the slug out of
+`state/scheduled-repos` if you want `/orchestrate` and manual launches only), and it is
+**not** an exemption from anything: the deny-hook, `--add-dir` scoping, the draft/ready
+protocol and the human merge gate all apply unchanged.
+
+A `board:` key that is absent, or set to anything other than `none`, is today's
+board-sourced behavior byte-for-byte — no extra call is made for that slug. A mixed
+digest (`dr board-digest` with no slug) renders board-sourced and off-board repos in one
+report. If `gh issue list` fails for an off-board slug, the digest says so in two places
+(under the header and inside the dispatch bucket) and completes; it never lets a
+fetch failure read as an empty queue. `projects/financial-planning.yml` is the worked
+example — the one tracked manifest, kept for exactly that purpose.
 
 ### Enable the scheduled loop (optional)
 
