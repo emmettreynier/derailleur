@@ -298,17 +298,26 @@ VERDICT_SWEEP_LIMIT="${VERDICT_SWEEP_LIMIT:-25}"
 # uncertain-network rule the rest of this script follows.
 VERDICT_ARCHIVE="${VERDICT_ARCHIVE:-$ORCH/logs/archive}"
 
-# retire_verdict_file <file> <why> -> 0 if it (and its rotated sibling) were retired,
-# 1 if the move failed. The `.prev.json` sibling goes with it: leaving rotated slots behind
-# after their canonical file is gone is how the NEXT unbounded pile starts.
+# retire_verdict_file <file> <why> -> 0 if the canonical file was retired, 1 if not.
+# Adds the number of FILES it moved (1, or 2 with a rotated sibling) to _RETIRED_N — the
+# sweep reports files rather than pairs, because that is what the operator sees in logs/.
+# The `.prev.json` sibling goes with it: leaving rotated slots behind after their canonical
+# file is gone is how the NEXT unbounded pile starts.
+#
+# The counter is a script-level global rather than a return value because the caller runs
+# inside a `while … done 3<<FILES` loop, which is NOT a subshell — an assignment made here
+# survives, while shelling out to capture a count would not be worth the fork.
+_RETIRED_N=0
 retire_verdict_file() {
   local f="$1" why="$2" prev base rc=0
   base="$(basename "$f")"
   prev="${f%.json}.prev.json"
   if [ "$DRY_RUN" = 1 ]; then
     echo "ledger-prune: ${DRY_TAG}retire $base — $why" >&2
+    _RETIRED_N=$((_RETIRED_N + 1))
     if [ -f "$prev" ]; then
       echo "ledger-prune: ${DRY_TAG}retire $(basename "$prev") — rotated sibling of $base" >&2
+      _RETIRED_N=$((_RETIRED_N + 1))
     fi
     return 0
   fi
@@ -321,9 +330,11 @@ retire_verdict_file() {
     return 1
   fi
   echo "ledger-prune: retire $base — $why" >&2
+  _RETIRED_N=$((_RETIRED_N + 1))
   if [ -f "$prev" ]; then
     if mv -f "$prev" "$VERDICT_ARCHIVE/$(basename "$prev")" 2>/dev/null; then
       echo "ledger-prune: retire $(basename "$prev") — rotated sibling of $base" >&2
+      _RETIRED_N=$((_RETIRED_N + 1))
     else
       echo "⚠ retired $base but could not retire its $(basename "$prev") — retire it by hand" >&2
       rc=1
@@ -333,7 +344,8 @@ retire_verdict_file() {
 }
 
 sweep_unowned_verdicts() {
-  local files f key slug pr repo v label issue prstate labs n=0 skipped=0 found=0 retired=0 unowned=0
+  local files f key slug pr repo v label issue prstate labs n=0 skipped=0 found=0 unowned=0
+  _RETIRED_N=0
   files="$(ls -t "$ORCH"/logs/*-verdict.json 2>/dev/null || true)"   # newest first
   [ -n "$files" ] || return 0
   while IFS= read -r f <&3; do        # fd 3, not stdin — the gh calls below inherit stdin
@@ -375,7 +387,7 @@ sweep_unowned_verdicts() {
       # NETWORK, not a closed PR, and it must retire nothing: the next cycle re-reads it.
       # Only a successful, parsed, non-OPEN state is grounds for retirement (issue #85).
       if [ -n "$prstate" ]; then
-        if retire_verdict_file "$f" "$repo#$pr is $prstate"; then retired=$((retired + 1)); fi
+        retire_verdict_file "$f" "$repo#$pr is $prstate" || true
       fi
       continue
     fi
@@ -395,8 +407,8 @@ sweep_unowned_verdicts() {
   done 3<<FILES
 $files
 FILES
-  if [ "$retired" -gt 0 ]; then
-    echo "ledger-prune: ${DRY_TAG}verdict sweep retired $retired closed-PR verdict file(s) to ${VERDICT_ARCHIVE#$ORCH/}/" >&2
+  if [ "$_RETIRED_N" -gt 0 ]; then
+    echo "ledger-prune: ${DRY_TAG}verdict sweep retired $_RETIRED_N closed-PR verdict file(s) to ${VERDICT_ARCHIVE#$ORCH/}/" >&2
   fi
   # The truncation note, reworded (issue #85). It used to read as "coverage was lost" and
   # fired every single cycle with a number that only climbed, on the same channel as the
