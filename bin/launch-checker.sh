@@ -24,6 +24,12 @@ source "$ORCH/bin/config-common.sh"   # OPERATOR_NAME (rendered into the checker
 HOOK="$ORCH/host/hooks/raw-data-guard.py"
 BRIEF_FILE="$ORCH/briefs/checker-brief.md"
 source "$ORCH/bin/dispatch-common.sh"   # classify_result / finalize_dispatch
+# Machine env (issue #93): source the per-machine shared shell env (~/.bootstrap_env.sh)
+# so the agent sees what an interactive shell here sees — e.g. QUARTO_CHROMIUM on the
+# DGX. The dispatch path is all non-login `bash -c`, which reads neither ~/.profile nor
+# (on stock Ubuntu) ~/.bashrc. Done FIRST, before any gh/git call, because the file can
+# also set PATH (the DGX's linuxbrew `gh`). No-op where it is absent; see dispatch-common.sh.
+source_machine_env
 
 # Render a brief .md file into a system-prompt string: strip the leading HTML-comment
 # header, then substitute every {{TOKEN}} from the matching BRIEF_<TOKEN> env var.
@@ -236,6 +242,7 @@ INFO
     done
   fi
   cat <<INFO
+#   machine env   : $MACHINE_ENV_FILE ($MACHINE_ENV_STATUS)   QUARTO_CHROMIUM=${QUARTO_CHROMIUM:-<unset>}
 #   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)
 #                   Agent DISABLED (no subagents: delegation escapes brief + Stop hook)
 #   verdict file  : $VERDICT_FILE   <- $ORCH/logs writable (carveout + --add-dir)

@@ -1105,3 +1105,55 @@ cd "$RIS_WT" && eval "$RIS_CMD" >>"$RIS_LOG" 2>&1 || true
 [ "$RIS_KIND" = checker ] && report_mutation "$RIS_WT" "$RIS_BASE" >>"$RIS_LOG" 2>&1
 finalize_dispatch "$RIS_LOG" "$RIS_LEDGER" "$$" "$RIS_WT" "$RIS_KIND" >>"$RIS_LOG" 2>&1'
 }
+
+# source_machine_env — load the machine's shared shell environment into the LAUNCHER
+# before the agent starts, so a worker/checker sees what an interactive shell on the same
+# box sees (issue #93). The default file is ~/.bootstrap_env.sh, generated per machine by
+# the hub's bootstrap (project-management-v2 `bootstrap/install-linux.sh`) and normally
+# reached via ~/.profile or ~/.bashrc. A dispatched agent reaches neither: every hop on
+# the dispatch path is a non-login `bash -c` (cron/launchd, the orchestrator's Bash tool,
+# run_in_new_session's chain), which never reads ~/.profile, and stock Ubuntu's
+# ~/.bashrc returns early when non-interactive. That is how QUARTO_CHROMIUM went missing
+# on the DGX and every headless `make draft` died with `ERROR: Chrome not found`.
+#
+# DERAILLEUR_MACHINE_ENV overrides the path — the "equivalent per-machine env hook" for a
+# machine that keeps its env elsewhere, and how the test suite points at a fixture (or at
+# nothing) instead of the real file. A missing file is a silent no-op: such a machine's
+# dispatch environment is exactly what it was before this existed.
+#
+# The file is sourced AS-IS — derailleur adds nothing to it and filters nothing out of it.
+# Only EXPORTED variables reach the agent (the launcher's env is what `claude` inherits,
+# through `env …` and the detached chain alike). It runs with `set -euo pipefail` lifted,
+# since a shell-init file is written for an interactive shell, not a strict-mode script,
+# and the caller's options are restored afterwards. A nonzero status from the file is
+# reported on stderr but does not abort the dispatch.
+#
+# Sets MACHINE_ENV_FILE (the path consulted) and MACHINE_ENV_STATUS (`sourced`,
+# `sourced (status N)`, or `absent`) for the launchers' --dry-run line.
+source_machine_env() {
+  MACHINE_ENV_FILE="${DERAILLEUR_MACHINE_ENV:-$HOME/.bootstrap_env.sh}"
+  if [ ! -f "$MACHINE_ENV_FILE" ]; then
+    MACHINE_ENV_STATUS="absent"
+    return 0
+  fi
+  # Snapshot -e/-u/pipefail from $- and `shopt -qo`, NOT `$(set +o)`: a command
+  # substitution runs with errexit cleared, so it would "restore" -e as off.
+  local _sme_e=0 _sme_u=0 _sme_p=0 _sme_rc=0
+  case "$-" in *e*) _sme_e=1 ;; esac
+  case "$-" in *u*) _sme_u=1 ;; esac
+  shopt -qo pipefail && _sme_p=1
+  set +euo pipefail
+  # shellcheck disable=SC1090
+  . "$MACHINE_ENV_FILE" || _sme_rc=$?
+  set +euo pipefail   # the file may itself have set any of them
+  [ "$_sme_e" = 1 ] && set -e
+  [ "$_sme_u" = 1 ] && set -u
+  [ "$_sme_p" = 1 ] && set -o pipefail
+  if [ "$_sme_rc" -eq 0 ]; then
+    MACHINE_ENV_STATUS="sourced"
+  else
+    MACHINE_ENV_STATUS="sourced (status $_sme_rc)"
+    echo "warning: machine env $MACHINE_ENV_FILE returned status $_sme_rc; dispatching anyway" >&2
+  fi
+  return 0
+}

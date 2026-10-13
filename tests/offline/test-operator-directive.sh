@@ -222,6 +222,8 @@ fi
 write_comments "$OTHER"
 zero_out="$(dry "$SHIM_OK")"
 
+# The `machine env` line (issue #93) reports the sandbox's deliberately-absent env file
+# (sandbox.sh points DERAILLEUR_MACHINE_ENV at a path that cannot exist).
 # The launcher resolves its own root with `cd … && pwd`, which normalizes the `//` mktemp
 # leaves when TMPDIR ends in a slash — normalize here too, or this compares cosmetics.
 SBN="$(cd "$SB" && pwd)"
@@ -231,6 +233,7 @@ want="$(cat <<EXPECTED
 #   working clone : $CLONE
 #   worktree      : $WTS/issue-$ISSUE   (branch: issue-$ISSUE)
 #   raw (RO)      : $CLONE   <- --add-dir + deny-hook protected
+#   machine env   : $DERAILLEUR_MACHINE_ENV (absent)   QUARTO_CHROMIUM=${QUARTO_CHROMIUM:-<unset>}
 #   outputs       : data/results/
 #   directives    : 0   <- \`**Operator directive:\` issue comments injected into the brief (#77)
 #   tools         : Agent DISABLED (no subagents: delegation escapes brief + Stop hook)
