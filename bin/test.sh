@@ -104,7 +104,10 @@ fi
 # summary) and separately track whether any OFFLINE file exited nonzero (the gate).
 total_pass=0 total_skip=0 total_fail=0
 offline_failed=0
-declare -a FAILED_FILES
+# Assigned empty, not just `declare -a`'d: bash >= 4.4 treats a declared-but-unset
+# array as unbound under `set -u`, so `${#FAILED_FILES[@]}` below errored on Linux
+# (bash 5.2) on every clean run (issue #102). bash 3.2 tolerates both forms.
+FAILED_FILES=()
 
 run_tier() {  # $1 = tier label (offline|online); $2 = dir
   local tier="$1" dir="$2" f rc out

@@ -89,8 +89,11 @@ bash tests under `tests/`, in **two tiers**.
 
 - **Offline tier** (`tests/offline/`) — deterministic, needs no network / `gh`. It
   always runs and must pass. This is the tier CI runs on every push (see the badge
-  above): `dr test --offline` on `macos-latest`, whose runner still ships **bash 3.2**,
-  so CI exercises the same interpreter (and its compat traps) your Mac uses.
+  above): `dr test --offline` on **both** `macos-latest` and `ubuntu-latest`, and both
+  jobs must pass. The macOS runner still ships **bash 3.2**, so it exercises the same
+  interpreter (and its compat traps) your Mac uses. The Ubuntu runner has bash 5 and
+  GNU coreutils, the DGX's userland, so it catches GNU/BSD differences such as #92's
+  `stat -f` before they reach the DGX (issue #102). It installs `jq` and `tmux`.
 - **Online tier** (`tests/online/`) — exercises the real `gh` paths (board digest,
   live pruning). Each test **SKIPs with a warning** when there's no network / `gh`
   auth, and never fails the run when offline.
@@ -114,7 +117,9 @@ deliberately delayed, watched concurrently, fires exactly once on its own verdic
 its `file_mtime()` portability (issue #92: the verdict-file mtime is a bare integer that
 matches `date -r` on the host, and under PATH-shimmed GNU *and* BSD `stat` alike, so a
 fresh verdict is named on the terminal line with no `integer expression expected`; plus a
-grep that no other `stat -f` call is left in `bin/` or `host/`);
+grep that no other `stat -f` call is left in `bin/` or `host/`); its `to_epoch()` portability
+(issue #102: an ISO8601Z stamp parses to the same epoch under the host's `date` and under
+PATH-shimmed GNU *and* BSD `date`, an unparseable stamp is empty, epoch seconds pass through);
 the `dispatch-common.sh`
 completion gate (`tmux_job_state`'s pane-dead liveness and `assert_finalized`'s
 per-role reason battery — including the "finished tmux session still counts as done"
@@ -717,7 +722,7 @@ derailleur/
 │   ├── fixtures/                     Static inputs (e.g. manifests/ for parser conformance)
 │   ├── offline/                      Deterministic tests (no gh/network) — the tier CI runs
 │   └── online/                       Real-`gh` tests that SKIP cleanly when offline
-├── .github/workflows/ci.yml      CI: runs the offline tier on macos-latest (bash 3.2)
+├── .github/workflows/ci.yml      CI: runs the offline tier on macos-latest (bash 3.2) and ubuntu-latest (GNU)
 ├── ledger.md, logs/, state/      Machine-local runtime state (gitignored)
 └── diagrams/                     Supporting diagrams
 ```
