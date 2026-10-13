@@ -118,7 +118,14 @@ accumulating, a missing file is a clean no-op under `set -e`, `--dry-run` leaves
 byte-identical, and `watch-dispatch.sh` never reads the rotated slot);
 `tmux-run.sh` name/log derivation, `--tail` validation, `{{SLUG}}` wiring,
 and (when `tmux` is present) the atomic-create mutex; the `scheduled_repos` allow-list
-reader and `schedule.sh enable`/`disable`; `worktree-prune.sh --auto --dry-run` on an
+reader and `schedule.sh enable`/`disable`; the **durable pause** against a stateful
+`launchctl` shim (`pause` writes `state/paused` and calls `disable` + `bootout`, a repeat
+or bootout-failing pause reports from the marker rather than from bootout, `status`
+separates paused / loaded / installed-not-loaded / not installed, `install` while paused
+re-renders but never bootstraps, `resume` clears the marker and calls `enable` before
+`bootstrap`, the in-flight guard still refuses, `schedule.sh run` passes
+`--ignore-pause`, and `run-cycle.sh` exits on the marker, logging `paused — not running`,
+without arming a wake or running the cycle); `worktree-prune.sh --auto --dry-run` on an
 empty sandbox (the bash-3.2 regression net) plus its dead-`derail-*`-tmux-session reaper
 (dead reaped / alive left / non-`derail-` untouched / `--dry-run` kills nothing / no
 server is a clean no-op — run against a private tmux socket, and SKIPped when `tmux` is
@@ -546,16 +553,34 @@ dr schedule live          # let scheduled runs dispatch for real (spend)
 dr schedule plan-only     # back to no-spend (mechanically: cycles cannot dispatch for real)
 dr schedule enable <slug> # add an onboarded repo to the autonomous-dispatch allow-list
 dr schedule disable <slug># remove a repo from the allow-list (emptying it restores all-live)
-dr schedule run           # run one cycle right now (respects the current mode)
+dr schedule run           # run one cycle right now (respects the current mode; overrides a pause, once)
 dr schedule run --dry-run # run one cycle right now in plan-only mode (free)
-dr schedule pause         # stop firing entirely (e.g. while away); refuses if a worker is in-flight
+dr schedule pause         # stop firing entirely (e.g. while away) — survives reboot; refuses if a worker is in-flight
 dr schedule pause --force # pause even with live workers (bootout SIGTERMs them — loses their work)
-dr schedule resume        # start firing again after a pause
+dr schedule resume        # undo a pause and start firing again
 dr schedule uninstall     # remove completely (unregister timer, cancel wakes)
 ```
 
 `dr schedule <cmd>` works from any directory; `./bin/schedule.sh <cmd>` from the repo
 root does the same thing.
+
+**`pause` is durable across reboot and logout.** It writes `state/paused` (machine-local,
+gitignored) and sets launchd's persistent `launchctl disable` flag, as well as unloading
+the job. launchd reloads every plist in `~/Library/LaunchAgents` at login, so a bare
+unload used to resume the loop silently after a restart. Now:
+
+- A scheduled fire that runs anyway (manual `launchctl bootstrap`, a launchd quirk) sees
+  `state/paused`, logs `paused — not running` to `logs/cycle.log`, and exits before the
+  wake arm, the jitter and any dispatch.
+- `dr schedule status` reports **PAUSED** from `state/paused`, and keeps it distinct from
+  *not installed*, *loaded*, and *installed but not loaded*.
+- `dr schedule install` while paused **keeps the pause**: it re-renders the plist but
+  does not load it, and says so. Only `resume` un-pauses. `uninstall` leaves the
+  marker too, so a later re-install stays paused.
+- `dr schedule resume` clears the marker, runs `launchctl enable`, then loads the job.
+- `dr schedule run` is the one deliberate override. It runs a single cycle despite the
+  pause (it passes `--ignore-pause` to `run-cycle.sh`, which nothing else does), prints
+  that it is overriding, and leaves the pause in place.
 
 **Per-repo allow-list (which onboarded repos the *autonomous* loop may spend on).**
 By default every onboarded repo is autonomously dispatchable. `enable`/`disable`
