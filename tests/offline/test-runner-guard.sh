@@ -14,11 +14,13 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # mk_checkout DIR — build a minimal fake derailleur checkout: the real bin/test.sh
 # under test, the bin/derailleur + tests/offline/ markers the guard identifies a
-# checkout by, and two trivial offline tests so the banner has a count to report.
+# checkout by, tests/lib/hermetic.sh (which the runner sources, issue #101), and two
+# trivial offline tests so the banner has a count to report.
 mk_checkout() {
   local d="$1" i
-  mkdir -p "$d/bin" "$d/tests/offline" "$d/tests/online"
+  mkdir -p "$d/bin" "$d/tests/offline" "$d/tests/online" "$d/tests/lib"
   cp "$REPO_ROOT/bin/test.sh" "$d/bin/test.sh"
+  cp "$REPO_ROOT/tests/lib/hermetic.sh" "$d/tests/lib/hermetic.sh"
   : >"$d/bin/derailleur"
   for i in one two; do
     printf 'echo "PASS: fake %s"\n' "$i" >"$d/tests/offline/test-$i.sh"
