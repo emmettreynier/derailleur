@@ -15,6 +15,14 @@
 # when that subshell exits and delete the root out from under the caller.
 _SANDBOX_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/derailleur-test.XXXXXX")"
 
+# Drop host state inherited from the environment. config-common.sh EXPORTS
+# SCHEDULED_REPOS_FILE (default: the install checkout's state/scheduled-repos), so a
+# suite run from inside a dispatched worker/checker session inherits the operator's
+# real allow-list, and a sandboxed script would honour it instead of the sandbox's own
+# state/ — surfacing as `⏸ scheduler-paused` lines in a digest golden (PR #97 review).
+# Tests that exercise the allow-list set it explicitly per case, after this point.
+unset SCHEDULED_REPOS_FILE
+
 # Cleanup is bare-short-circuit safe (explicit `return 0`, per CLAUDE.md) so it can't
 # abort a `set -e` test if it happens to be the last statement before exit.
 _sandbox_cleanup() {
