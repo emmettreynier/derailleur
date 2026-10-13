@@ -107,3 +107,12 @@ out="$(cd "$B" && bash "$A/bin/test.sh" --offline 2>&1 || true)"
 assert_eq "testing $A (2 files in tests/offline)" "$(head1 "$out")" \
   "banner is printed on a refused run too" \
   "The banner must precede the refusal so even a bypassed guard states the tree."
+
+# (f) a clean run's summary raises no `unbound variable` (issue #102). FAILED_FILES was
+#     only `declare -a`'d, which bash >= 4.4 treats as unbound under `set -u`, so every
+#     all-green run on Linux printed `FAILED_FILES: unbound variable` after the tally.
+#     bash 3.2 accepts the old form, so this check only bites on the Linux CI leg.
+out="$(cd "$NOGIT" && bash "$A/bin/test.sh" --offline 2>&1 || true)"
+assert_contains "$out" "RESULT: PASS" "clean run (unbound-variable check) completes the suite"
+assert_not_contains "$out" "unbound variable" "a clean run's summary raises no unbound-variable error" \
+  "Initialise FAILED_FILES=() in bin/test.sh; a bare declare -a is unbound under set -u on bash >= 4.4."
