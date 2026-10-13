@@ -54,6 +54,13 @@ case "$OWNER_REPO" in
   *) die "expected <owner/repo>, got '$OWNER_REPO'" ;;
 esac
 SLUG="${OWNER_REPO##*/}"
+# `all` is RESERVED (issue #91): `/orchestrate all` / `board-digest.sh all` mean the
+# whole board, so a repo onboarded as `all` could never be scoped to. Refused here,
+# before any label, clone, directory or manifest is touched. Case-insensitive, like the
+# digest's own match (and macOS's filesystem, where projects/ALL.yml IS projects/all.yml).
+case "$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]')" in
+  all) die "slug '$SLUG' is reserved — 'all' means the whole board to /orchestrate and board-digest.sh; rename the repo or onboard it under another name" ;;
+esac
 
 ARCHETYPE="git-native"
 CLONE=""
