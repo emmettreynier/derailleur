@@ -100,6 +100,10 @@ predates the dispatch are both refused; no line yet stays pending and times out 
 loud `no-dispatch-record`; a dead pid still reports `unknown`; `@<pid>` resolves the
 line by identity — and a stubbed launch whose ledger append and verdict rotation are
 deliberately delayed, watched concurrently, fires exactly once on its own verdict);
+its `file_mtime()` portability (issue #92: the verdict-file mtime is a bare integer that
+matches `date -r` on the host, and under PATH-shimmed GNU *and* BSD `stat` alike, so a
+fresh verdict is named on the terminal line with no `integer expression expected`; plus a
+grep that no other `stat -f` call is left in `bin/` or `host/`);
 the `dispatch-common.sh`
 completion gate (`tmux_job_state`'s pane-dead liveness and `assert_finalized`'s
 per-role reason battery — including the "finished tmux session still counts as done"
