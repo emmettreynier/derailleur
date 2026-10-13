@@ -108,13 +108,23 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   `blocked` and `needs-definition` are NOT routing labels and must stay untouched by it.
 - Three comment **leads** make GitHub comments machine-legible: `**Checker verdict:`
   (counted by `CHECKER_ROUND_LEADS`, `bin/dispatch-common.sh`), `**Worker interrupted:` /
-  `**Worker incomplete:` (counted by `NO_FINISH_LEADS`, `bin/ledger-prune.sh`), and
+  `**Worker incomplete:` (counted by `NO_FINISH_LEADS` / `worker_no_finish_counts`, `bin/dispatch-common.sh` — shared by `bin/ledger-prune.sh` and `bin/round-cap.sh`), and
   `**Operator directive:` (issue #77 — injected verbatim into the worker's prompt by
   `bin/launch-worker.sh`, mirrored into the issue body as a `- [ ] (directive)` criterion).
   The directive lead must stay **out of both counting lists**: it is the operator replying,
   so it resets the worker counters like any other comment, and counting it would escalate
   the operator's own instruction as a failed round. Its fetch must also stay **fail-soft** —
   the offline tier dry-runs the launcher with no network, a failing `gh` and no `gh` at all.
+- **`board-digest.sh`'s empty argument is load-bearing.** `orchestrator-cycle.sh` calls it
+  with none and relies on "whole board"; the cwd default `/orchestrate` uses is the opt-in
+  `--here` flag (issue #91), and `all` is reserved (`new-project.sh` refuses it). A change
+  to the no-arg output or its `gh` calls fails `tests/offline/test-digest-scope.sh`'s
+  pre-#91 golden — re-record it (`WRITE_DIGEST_SCOPE_GOLDEN=1`) only for a *deliberate*
+  output change, and say so in the PR. `--here` reads `working_clone:` with its own copy
+  of the `yml()` scalar grammar — one more mirror to keep in step with the launchers.
+- The interactive path enforces the round caps through `bin/round-cap.sh`, not the
+  launchers (manual `dr launch-*` stays uncapped by design). It must stay read-only — a
+  tripped cap there is stop-and-ask, never a label write.
 - Check `design.md`'s "Verified CLI capabilities" table before relying on a
   `claude` CLI flag — some (e.g. `--max-turns`) don't exist in the pinned version.
 - Any change to the safety model (hooks in `host/hooks/`, `--add-dir`,
