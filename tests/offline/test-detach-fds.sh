@@ -152,8 +152,13 @@ if command -v lsof >/dev/null 2>&1; then
     "run_in_new_session must point the detached chain's stdout/stderr at \$LOG."
   types="$(lsof -a -p "$pid" -Ft 2>/dev/null | sed -n 's/^t//p' | sort -u | tr '\n' ' ')"
   case "$types" in
-    *PIPE*|*FIFO*) fail "the session leader still holds a pipe (fd types: $types)" \
-                     "The caller's stdout leaked into the detached chain (issue #100): run_in_new_session must redirect the exec itself." ;;
+    *PIPE*|*FIFO*)
+      # Name the holder: every fd of the leader, and the test shell's own fds, so a pipe
+      # the leader inherited from the environment can be told from the caller's.
+      echo "  --- lsof -p $pid (session leader):"; lsof -p "$pid" 2>&1 | sed 's/^/    /'
+      echo "  --- lsof -p $$ (this test shell):"; lsof -p "$$" 2>&1 | sed 's/^/    /'
+      fail "the session leader still holds a pipe (fd types: $types)" \
+        "The caller's stdout leaked into the detached chain (issue #100): run_in_new_session must redirect the exec itself." ;;
     *) pass "the session leader holds no pipe on any fd (types: $types)" ;;
   esac
 else
