@@ -131,6 +131,14 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   path's non-login `bash -c` shells never read `~/.profile`/`~/.bashrc`. A test that runs
   a launcher must source `tests/lib/sandbox.sh`, which points `DERAILLEUR_MACHINE_ENV` at
   a nonexistent path; otherwise the test loads the real file, and its output varies by machine.
+- **A new exported variable goes on `tests/lib/hermetic.sh`'s list.** The offline tier
+  is hermetic against the operator's env (issue #101): `bin/test.sh` and
+  `tests/lib/sandbox.sh` unset every name there, because dispatched sessions inherit
+  `config-common.sh`'s and the launchers' exports and a sandboxed script would read the
+  host's value. `tests/offline/test-hermetic-env.sh` scans `bin/` for `export`s, the
+  launchers' `env "NAME=…"`, host-hook env reads and `orchestrator.conf.example` keys,
+  and fails on any name missing from the list. An env-only tunable read via
+  `${VAR:-default}` without an export is not caught by the scan, so add it by hand.
 - Check `design.md`'s "Verified CLI capabilities" table before relying on a
   `claude` CLI flag — some (e.g. `--max-turns`) don't exist in the pinned version.
 - Any change to the safety model (hooks in `host/hooks/`, `--add-dir`,

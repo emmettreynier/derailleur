@@ -14,11 +14,13 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # mk_checkout DIR — build a minimal fake derailleur checkout: the real bin/test.sh
 # under test, the bin/derailleur + tests/offline/ markers the guard identifies a
-# checkout by, and two trivial offline tests so the banner has a count to report.
+# checkout by, tests/lib/hermetic.sh (which the runner sources, issue #101), and two
+# trivial offline tests so the banner has a count to report.
 mk_checkout() {
   local d="$1" i
-  mkdir -p "$d/bin" "$d/tests/offline" "$d/tests/online"
+  mkdir -p "$d/bin" "$d/tests/offline" "$d/tests/online" "$d/tests/lib"
   cp "$REPO_ROOT/bin/test.sh" "$d/bin/test.sh"
+  cp "$REPO_ROOT/tests/lib/hermetic.sh" "$d/tests/lib/hermetic.sh"
   : >"$d/bin/derailleur"
   for i in one two; do
     printf 'echo "PASS: fake %s"\n' "$i" >"$d/tests/offline/test-$i.sh"
@@ -107,3 +109,12 @@ out="$(cd "$B" && bash "$A/bin/test.sh" --offline 2>&1 || true)"
 assert_eq "testing $A (2 files in tests/offline)" "$(head1 "$out")" \
   "banner is printed on a refused run too" \
   "The banner must precede the refusal so even a bypassed guard states the tree."
+
+# (f) a clean run's summary raises no `unbound variable` (issue #102). FAILED_FILES was
+#     only `declare -a`'d, which bash >= 4.4 treats as unbound under `set -u`, so every
+#     all-green run on Linux printed `FAILED_FILES: unbound variable` after the tally.
+#     bash 3.2 accepts the old form, so this check only bites on the Linux CI leg.
+out="$(cd "$NOGIT" && bash "$A/bin/test.sh" --offline 2>&1 || true)"
+assert_contains "$out" "RESULT: PASS" "clean run (unbound-variable check) completes the suite"
+assert_not_contains "$out" "unbound variable" "a clean run's summary raises no unbound-variable error" \
+  "Initialise FAILED_FILES=() in bin/test.sh; a bare declare -a is unbound under set -u on bash >= 4.4."

@@ -15,13 +15,16 @@
 # when that subshell exits and delete the root out from under the caller.
 _SANDBOX_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/derailleur-test.XXXXXX")"
 
-# Drop host state inherited from the environment. config-common.sh EXPORTS
-# SCHEDULED_REPOS_FILE (default: the install checkout's state/scheduled-repos), so a
-# suite run from inside a dispatched worker/checker session inherits the operator's
-# real allow-list, and a sandboxed script would honour it instead of the sandbox's own
-# state/ — surfacing as `⏸ scheduler-paused` lines in a digest golden (PR #97 review).
-# Tests that exercise the allow-list set it explicitly per case, after this point.
-unset SCHEDULED_REPOS_FILE
+# Drop host state inherited from the environment (issue #101). config-common.sh and
+# the launchers EXPORT operator/dispatch settings (SCHEDULED_REPOS_FILE, DIGEST_SLUG,
+# QUARTO_CHROMIUM, …), so a suite run from inside a dispatched worker/checker session
+# would otherwise hand the operator's real values to every sandboxed script — first
+# seen as `⏸ scheduler-paused` lines in a digest golden (PR #97 review). bin/test.sh
+# does the same for the offline tier; doing it here too covers a test run directly.
+# The list lives in hermetic.sh. Tests that exercise one of these vars set it
+# explicitly per case, after this point.
+. "$(dirname "${BASH_SOURCE[0]}")/hermetic.sh"
+hermetic_unset
 
 # Cleanup is bare-short-circuit safe (explicit `return 0`, per CLAUDE.md) so it can't
 # abort a `set -e` test if it happens to be the last statement before exit.

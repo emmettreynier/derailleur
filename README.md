@@ -89,8 +89,11 @@ bash tests under `tests/`, in **two tiers**.
 
 - **Offline tier** (`tests/offline/`) — deterministic, needs no network / `gh`. It
   always runs and must pass. This is the tier CI runs on every push (see the badge
-  above): `dr test --offline` on `macos-latest`, whose runner still ships **bash 3.2**,
-  so CI exercises the same interpreter (and its compat traps) your Mac uses.
+  above): `dr test --offline` on **both** `macos-latest` and `ubuntu-latest`, and both
+  jobs must pass. The macOS runner still ships **bash 3.2**, so it exercises the same
+  interpreter (and its compat traps) your Mac uses. The Ubuntu runner has bash 5 and
+  GNU coreutils, the DGX's userland, so it catches GNU/BSD differences such as #92's
+  `stat -f` before they reach the DGX (issue #102). It installs `jq` and `tmux`.
 - **Online tier** (`tests/online/`) — exercises the real `gh` paths (board digest,
   live pruning). Each test **SKIPs with a warning** when there's no network / `gh`
   auth, and never fails the run when offline.
@@ -114,7 +117,9 @@ deliberately delayed, watched concurrently, fires exactly once on its own verdic
 its `file_mtime()` portability (issue #92: the verdict-file mtime is a bare integer that
 matches `date -r` on the host, and under PATH-shimmed GNU *and* BSD `stat` alike, so a
 fresh verdict is named on the terminal line with no `integer expression expected`; plus a
-grep that no other `stat -f` call is left in `bin/` or `host/`);
+grep that no other `stat -f` call is left in `bin/` or `host/`); its `to_epoch()` portability
+(issue #102: an ISO8601Z stamp parses to the same epoch under the host's `date` and under
+PATH-shimmed GNU *and* BSD `date`, an unparseable stamp is empty, epoch seconds pass through);
 the `dispatch-common.sh`
 completion gate (`tmux_job_state`'s pane-dead liveness and `assert_finalized`'s
 per-role reason battery — including the "finished tmux session still counts as done"
@@ -198,7 +203,13 @@ lifted for the file and `-e`/`-u`/`pipefail` restored after one that clears them
 switched on for a caller that lacked them); a file ending nonzero warns without aborting;
 and both launchers' `--dry-run` print the `machine env` line, `sourced` with the fixture's
 `QUARTO_CHROMIUM` or `absent` with it `<unset>`. The sandbox points
-`DERAILLEUR_MACHINE_ENV` at a nonexistent path, so no test reads the real file; and
+`DERAILLEUR_MACHINE_ENV` at a nonexistent path, so no test reads the real file; the
+**hermetic env** (`tests/offline/test-hermetic-env.sh`, issue #101): every name `bin/`
+really exports, every env var a host hook reads and every `orchestrator.conf.example` key
+is on the `tests/lib/hermetic.sh` list (or explicitly exempt), the real `bin/test.sh` run
+under all of them set to poison values hands none to an offline test but all to an online
+one, sourcing `sandbox.sh` drops them for a test run directly, and `test-digest-scope.sh`
+and `test-machine-env.sh` stay green under the poison; and
 the **routing-label invariant** (`tests/offline/test-routing-labels.sh`) — the three
 labels are mutually exclusive and `set_routing_label` is their one writer, so a stateful
 `gh` shim whose label set really honours `--add-label`/`--remove-label` pins both
@@ -314,6 +325,14 @@ testing /path/to/derailleur (12 files in tests/offline)
 
 Each test file is self-contained and can be run directly for debugging, e.g.
 `bash tests/offline/test-config-guard.sh`.
+
+**Hermetic offline tier.** The offline tier never sees the operator's environment.
+`config-common.sh` and the launchers export operator and dispatch settings
+(`SCHEDULED_REPOS_FILE`, `DIGEST_SLUG`, `QUARTO_CHROMIUM`, …), and every dispatched
+worker or checker inherits them, so `bin/test.sh` unsets the list in
+`tests/lib/hermetic.sh` before each offline file, and `tests/lib/sandbox.sh` does the
+same for a test run directly. The online tier keeps your environment. Adding an
+`export` to `bin/` fails `test-hermetic-env.sh` until the name is on that list.
 
 **How to read a failure:** each check prints a `PASS:` line; steps that need the
 network or `gh` auth print `SKIP:` and never fail the run. A failed assertion prints a
@@ -725,7 +744,7 @@ derailleur/
 │   ├── fixtures/                     Static inputs (e.g. manifests/ for parser conformance)
 │   ├── offline/                      Deterministic tests (no gh/network) — the tier CI runs
 │   └── online/                       Real-`gh` tests that SKIP cleanly when offline
-├── .github/workflows/ci.yml      CI: runs the offline tier on macos-latest (bash 3.2)
+├── .github/workflows/ci.yml      CI: runs the offline tier on macos-latest (bash 3.2) and ubuntu-latest (GNU)
 ├── ledger.md, logs/, state/      Machine-local runtime state (gitignored)
 └── diagrams/                     Supporting diagrams
 ```
