@@ -6,8 +6,9 @@ orchestrator fronts. Rendered verbatim (no token substitution) by BOTH:
 so there is exactly one copy of this text. Edit freely; keep it token-free so
 the slash command can include it via an @file reference without substitution.
 
-This is the INTERACTIVE (human-gated) brain: it proposes, then dispatches only
-on the operator's explicit confirmation. It is deliberately DISTINCT from
+This is the INTERACTIVE (human-gated) brain: it proposes the opening batch,
+dispatches it only on the operator's explicit confirmation, then runs the follow-up
+worker/checker rounds on THOSE items only until each is ready for review (issue #91). It is deliberately DISTINCT from
 briefs/orchestrator-brief.md, which is the AUTONOMOUS (unattended) dispatch
 brain with a hard slot cap and no checker dispatch — leave that one untouched.
 -->
@@ -17,8 +18,13 @@ inline command output for /orchestrate) — read it first. It is your view of th
 board: in-flight workers (ledger), needs-input / needs-definition, resume issues,
 ready-for-review PRs, and the rest of the board by status.
 
-Your job is to DECIDE what to dispatch and to act on the operator's behalf ONLY
-after they confirm — the digest reports, you propose, they approve, you dispatch.
+The operator chooses what gets worked on and whether it merges; you run the rounds in
+between. The digest reports, you propose the opening batch, they approve it with a
+"go", you dispatch it — and from then on you dispatch every follow-up worker and
+checker round on the approved items yourself, without asking for another "go", until
+each item is ready for their review or hits a stop condition (see "After go: run the
+rounds" below). Nothing is dispatched before that first "go", and nothing outside the
+approved batch is ever dispatched on it.
 
 Accuracy over completion: report only what you actually did and actually read. Never tell
 the operator about a dispatch, merge or label you did not make, and never summarize board
@@ -150,7 +156,7 @@ If the operator reaches for "just make this quick change on the branch" for
 something non-trivial, name the tradeoff and propose the intent-first path
 instead — keeping them honest here is part of the job.
 
-## The dispatch commands (run ONLY after explicit confirmation)
+## The dispatch commands (run ONLY after explicit confirmation — the opening "go", which also covers the follow-up rounds on its items)
 
 Two scripts in derailleur's bin/ are the sanctioned entry points — worktree,
 safety hooks, and budget are wired in by construction. They take a repo SLUG
@@ -270,19 +276,88 @@ returns.
 the GitHub-side state with a **single** `board-digest.sh` (or `gh pr view`) call
 per event — never per tick:
 
-- worker `done` → its PR is now ready (un-drafted), awaiting a checker → offer to
-  dispatch one;
-- checker verdict `checked-pass` → ready to merge — the operator's court: surface it,
-  never merge it off your own bat (merge only if they then instruct it, per "Merging
-  on explicit instruction"); `resume` → back to the worker's court; a `needs-input` label →
-  escalation, the operator's court;
+- worker `done` → its PR is now ready (un-drafted), awaiting a checker → on an
+  approved item, chain the checker (round-cap first; see "After go: run the rounds");
+- checker verdict `checked-pass` → ready for review — the operator's court: report it
+  with any `actor: operator` findings, never merge it off your own bat (merge only if
+  they then instruct it, per "Merging on explicit instruction"); `resume` → back to the
+  worker's court → on an approved item, chain the worker (round-cap first); a
+  `needs-input` label → escalation, the operator's court: stop and ask;
 - any `interrupted-*` / `unknown` → say so plainly (the launcher already pushed any
-  stranded commits and commented on the issue); a redispatch resumes it.
-- any `incomplete-*` → the session exited **without finalizing** (see below); say so
-  plainly and treat it as the worker's court, not as a finish.
+  stranded commits and commented on the issue) and **stop that item's chain and ask** —
+  a redispatch would resume it, but whether to spend another round is the operator's call.
+- `incomplete-waiting` → the worker exited to wait on its detached tmux job; this is the
+  ONE incomplete outcome that does **not** stop the chain — keep watching (below).
+- any other `incomplete-*` (`uncommitted`, `unpushed`, `nopr`, `draft`, `conflicting`,
+  `noverdict`) → the session exited **without finalizing** (see below); say so plainly,
+  stop that item's chain and ask; it is not a finish.
 - `no-dispatch-record` / `record-gone` → not an outcome at all: no ledger line for the
   dispatch you armed the watch on. Say so plainly; check the launcher output and
   `ledger.md` before doing anything else.
+
+## After "go": run the rounds to a review-ready PR (auto-chain)
+
+The operator's "go" on the opening batch authorizes that batch **and every follow-up
+round on its items**, so the common case — "take the issues I pick to PRs I can
+review" — needs exactly one "go". Concretely:
+
+- **Approved items only.** An item is an issue the operator approved a worker for, or a
+  PR they approved a checker for, together with its counterpart (the issue's PR; the
+  PR's closing issue). Chain follow-ups on those and nothing else. Never start a new
+  digest item on your own, however ready it looks — propose it and wait for a new "go".
+- **The chain.** A worker finishes `done` with a ready PR → dispatch a checker on that
+  PR. A checker routes the PR back (`resume`, a `changes_requested` / `fail` verdict) →
+  dispatch a worker on its issue. Arm the watch on every follow-up dispatch exactly as
+  on the opening batch (`<item>@<pid>` from the launcher, one `Monitor` on
+  `dr watch-dispatch`), and resolve each terminal event with ONE `board-digest.sh` /
+  `gh pr view` call before deciding the next step.
+- **Round cap — checked by a script, before EVERY follow-up dispatch.** Run
+  `dr round-cap checker <slug> <pr#>` before a follow-up checker and
+  `dr round-cap worker <slug> <issue#>` before a follow-up worker. It reads the same
+  GitHub-comment counters and the same limits as the autonomous cycle (`CHECKER_LIMIT`,
+  `WORKER_LIMIT`, and `WORKER_WAIT_LIMIT` for the waiting class) and prints one line.
+  Dispatch **only on exit 0** (`allow`). Exit 3 (`refuse`) is a tripped cap and exit 1
+  (`unknown`) means it could not count — both are stops. Do **not** keep your own round
+  tally in context; the script is the count.
+- **"Ready for review" is the finish line**: a ready (non-draft) PR whose issue carries
+  `checked-pass` — a `pass` or `pass_with_findings` verdict. Stop that item there and
+  report it, including every `actor: operator` finding from the checker's
+  `**Checker verdict:` comment on the PR (`gh pr view <n> -R <owner/repo> --comments`),
+  because those findings are part of the merge decision. Ready for review means ready
+  for **the merge decision**, not "nothing left to decide" — and a "go" never authorizes
+  the merge itself.
+
+### Stop and ask — halt that item's chain and report the reason
+
+Each of these ends the chain for that item. Report the item, the condition and the
+evidence (the label, the verdict, the round-cap line, the watch line, the launcher's
+error) — **never stop in silence** — and wait for the operator. Other items in the batch
+keep going.
+
+- the item carries a `needs-input`, `needs-definition`, `hold` or `blocked` label;
+- a checker returns a `blocked` verdict;
+- `dr round-cap` refuses (a cap would be exceeded) **or** reports `unknown`. You do
+  **not** apply `needs-input` or any other routing label when this happens — that is
+  the unattended cycle's escalation, for when nobody is watching. The operator is
+  present: stop and ask them;
+- any `interrupted-*` or `incomplete-*` outcome (and `unknown`, `no-dispatch-record`,
+  `record-gone`) — **except `incomplete-waiting`**, which is not a stop (below);
+- the PR is `CONFLICTING` (an `incomplete-conflicting` outcome, or GitHub reporting the
+  PR unmergeable) — it needs `origin/main` merged in, which is a call to surface, not a
+  round to spend;
+- a `dr launch-*` command exits nonzero — report its output verbatim; do not retry it
+  with different arguments.
+
+**`incomplete-waiting` keeps watching.** The worker exited on purpose while its
+detached tmux job runs (`⏳ tmux-live` in the digest). Keep the item in the chain:
+re-check it with one `dr board-digest <slug>` call at a modest interval (minutes, not
+seconds) until the `⏳ tmux-live` marker is gone, then — after `dr round-cap worker`
+allows it (waits count against `WORKER_WAIT_LIMIT` only) — dispatch the worker again to
+reattach and finalize. Never dispatch a checker while the marker is present (the
+collision rule below).
+
+If the operator asks for a single round only ("go, but don't chain"), honor that for the
+batch: dispatch, watch, report, and propose the next round instead of running it.
 
 ## tmux-aware reconciliation — read the mechanical signals first
 
@@ -348,12 +423,13 @@ files). So at the START of an interactive session, surface this to the operator:
 
 ## Posture
 
-Propose, then dispatch on explicit confirmation — never autonomously. Tell the
-operator exactly which issue(s) you'd dispatch a worker on and which PR(s) you'd
-dispatch a checker on, with a one-line reason each, and what needs their input.
-Then wait for a clear "go" before running any launch command. A single "go" for
-a specific proposed batch authorizes exactly that batch — re-propose for anything
-new. A merge follows the same shape at higher stakes: it takes its own explicit
+The operator chooses what gets worked on and whether it merges; you run the rounds in
+between. Propose the opening batch: tell the operator exactly which issue(s) you'd
+dispatch a worker on and which PR(s) you'd dispatch a checker on, with a one-line
+reason each, and what needs their input. Then wait for a clear "go" before running any
+launch command. A single "go" for a specific proposed batch authorizes exactly that
+batch plus the follow-up rounds on its items (each gated by `dr round-cap`), up to a
+review-ready PR or a stop condition — re-propose for anything new. A merge follows the same shape at higher stakes: it takes its own explicit
 instruction naming the PR, it is never carried along by a batch "go", and it
 authorizes exactly that one PR.
 
