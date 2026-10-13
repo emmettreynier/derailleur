@@ -27,6 +27,12 @@ STOP_HOOK="$ORCH/host/hooks/worker-stop-guard.sh"
 TEMPLATE="$ORCH/templates/pr-results-summary.md"
 BRIEF_FILE="$ORCH/briefs/worker-brief.md"
 source "$ORCH/bin/dispatch-common.sh"   # classify_result / finalize_dispatch
+# Machine env (issue #93): source the per-machine shared shell env (~/.bootstrap_env.sh)
+# so the agent sees what an interactive shell here sees — e.g. QUARTO_CHROMIUM on the
+# DGX. The dispatch path is all non-login `bash -c`, which reads neither ~/.profile nor
+# (on stock Ubuntu) ~/.bashrc. Done FIRST, before any gh/git call, because the file can
+# also set PATH (the DGX's linuxbrew `gh`). No-op where it is absent; see dispatch-common.sh.
+source_machine_env
 
 # Render a brief .md file into a system-prompt string: strip the leading HTML-comment
 # header, then substitute every {{TOKEN}} from the matching BRIEF_<TOKEN> env var.
@@ -274,12 +280,6 @@ build_cmd() {
         --output-format json )
 }
 build_cmd
-
-# Machine env (issue #93): source the per-machine shared shell env (~/.bootstrap_env.sh)
-# so the agent sees what an interactive shell here sees — e.g. QUARTO_CHROMIUM on the DGX.
-# The dispatch path is all non-login `bash -c`, which reads neither ~/.profile nor (on
-# stock Ubuntu) ~/.bashrc. No-op where the file is absent; see dispatch-common.sh.
-source_machine_env
 
 # --- dry run: show resolved config + command, spend nothing -------------------
 if [ "$DRY" = 1 ]; then
