@@ -213,6 +213,12 @@ build_cmd() {
 }
 build_cmd
 
+# Machine env (issue #93): source the per-machine shared shell env (~/.bootstrap_env.sh)
+# so the agent sees what an interactive shell here sees — e.g. QUARTO_CHROMIUM on the DGX.
+# The dispatch path is all non-login `bash -c`, which reads neither ~/.profile nor (on
+# stock Ubuntu) ~/.bashrc. No-op where the file is absent; see dispatch-common.sh.
+source_machine_env
+
 # --- dry run: show resolved config + command, spend nothing -------------------
 if [ "$DRY" = 1 ]; then
   cat <<INFO
@@ -236,6 +242,7 @@ INFO
     done
   fi
   cat <<INFO
+#   machine env   : $MACHINE_ENV_FILE ($MACHINE_ENV_STATUS)   QUARTO_CHROMIUM=${QUARTO_CHROMIUM:-<unset>}
 #   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)
 #                   Agent DISABLED (no subagents: delegation escapes brief + Stop hook)
 #   verdict file  : $VERDICT_FILE   <- $ORCH/logs writable (carveout + --add-dir)
