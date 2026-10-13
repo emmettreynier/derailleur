@@ -1153,6 +1153,12 @@ bootstrap_worktree_data() {
 # the caller's pipe there, on the printed pid). Any reader waiting for EOF on the
 # launcher's output — `dr launch-worker … | tail`, `$(…)`, a tool harness — then waited
 # for the worker to exit. The inner redirects stay: same file, both O_APPEND, harmless.
+#
+# fds 0-2 are not the only way in. The launcher passes on EVERY fd it inherited, and a
+# harness can hand it more than three: CI's macOS runner left a pipe above fd 2 on the
+# leader (found by the test's lsof check), and a capture passed as `9>&1` blocked the
+# caller for the whole worker run, as the fd 0-2 leak did. So the setsid shim also closes
+# every fd >= 3 before it execs bash. Nothing in the chain reads an inherited fd above 2.
 run_in_new_session() {
   local log="$1" ledger="$2" worktree="$3" kind="$4" baseline="$5"; shift 5
   [ "${1:-}" = "--" ] && shift
@@ -1167,6 +1173,20 @@ run_in_new_session() {
 # if we already lead our own group we are already isolated from the parent group.
 if os.getpid() != os.getpgid(0):
     os.setsid()
+# Close every inherited fd >= 3: the exec redirect only covers 0-2 (issue #100).
+fds = None
+for d in ("/dev/fd", "/proc/self/fd"):
+    try:
+        fds = [int(f) for f in os.listdir(d)]
+        break
+    except OSError:
+        pass
+for fd in (fds if fds is not None else range(3, 1024)):
+    if fd > 2:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 os.execvp(sys.argv[1], sys.argv[1:])' \
       bash -c '
 source "$RIS_ORCH/dispatch-common.sh"

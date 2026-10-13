@@ -274,7 +274,8 @@ excluded, and the unchanged merge section (`test-orchestrate-command.sh`).
 The **detached launch's fds** (`tests/offline/test-detach-fds.sh`, issue #100): with a
 stub `claude` that sleeps 20 s, a real (non-dry-run) `launch-worker` and `launch-checker`
 piped into `cat` and captured via `$(…)` each return within a few seconds and print the pid
-line; their three-line synchronous output is unchanged; the printed pid is its own session
+line, as does a capture whose pipe is also handed in on fd 9 (an inherited fd above 2);
+their three-line synchronous output is unchanged; the printed pid is its own session
 and process-group leader, with stdin `/dev/null`, stdout/stderr the dispatch log and no pipe
 on any fd; it survives a SIGTERM to the caller's process group and `finalize_dispatch`
 still flips the ledger status; and `--foreground` still tees the agent's output.

@@ -117,6 +117,26 @@ for role in worker checker; do
   done
 done
 
+# --- 1b. an inherited fd ABOVE 2 that is the caller's pipe: still returns fast --------
+# A harness can hand a child more than fds 0-2 (CI's runner did; a pipe on fd 7 under
+# the test reproduced it). Before the fix the leader inherited every such fd and held it
+# for the worker's whole life, so a reader waiting for EOF on it blocked exactly like
+# the fd 0-2 case. `9>&1` passes the $(…) capture pipe as fd 9 as well.
+for role in worker checker; do
+  n=7; [ "$role" = checker ] && n=3
+  t0="$(now)"
+  out="$("$(launcher "$role")" detach-demo "$n" 2>&1 9>&1)"
+  dt=$(( $(now) - t0 ))
+  pid="$(pid_of "$out")"
+  [ -n "$pid" ] && echo "$pid" >>"$PIDS_FILE"
+  if [ "$dt" -le "$RETURN_LIMIT" ]; then
+    pass "launch-$role (capture, pipe also on fd 9) returns in ${dt}s while the stub claude sleeps ${STUB_SLEEP}s"
+  else
+    fail "launch-$role (capture, pipe also on fd 9) took ${dt}s to return (stub claude sleeps ${STUB_SLEEP}s)" \
+      "The detached chain inherited a caller fd above 2 — run_in_new_session's setsid shim must close fds >= 3 before exec (issue #100)."
+  fi
+done
+
 # --- 2. the synchronous stdout is unchanged: Dispatching / pid / watch, in order -------
 # The launcher resolves ORCH with `cd … && pwd`, which drops the `//` a trailing-slash
 # $TMPDIR leaves in $SB; the worktree path comes from the manifest verbatim.
