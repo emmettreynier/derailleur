@@ -22,12 +22,17 @@
 #   disable <slug>  remove a repo from the allow-list (emptying it restores all-live).
 #                   Both gate the AUTONOMOUS loop only — manual launch-*.sh and
 #                   interactive /orchestrate keep working on any onboarded repo.
-#   pause       stop the timer firing without uninstalling (e.g. while away). REFUSES
-#               if a worker/checker is still in-flight (bootout would SIGTERM the whole
-#               job tree, reaping them — issue #18); `pause --force` overrides and kills.
-#   resume      start firing again after a pause.
+#   pause       stop the timer firing without uninstalling (e.g. while away). DURABLE
+#               across reboot/logout (issue #90): writes state/paused, which run-cycle.sh
+#               checks and exits on, and `launchctl disable`s the label (persisted by
+#               launchd) besides booting it out. REFUSES if a worker/checker is still
+#               in-flight (bootout would SIGTERM the whole job tree, reaping them —
+#               issue #18); `pause --force` overrides and kills.
+#   resume      undo a pause: clear state/paused, `launchctl enable`, bootstrap.
 #   run         fire one cycle right now, inline + immediate (no jitter); RESPECTS mode.
-#   run --dry-run   force a free planning cycle now regardless of mode.
+#               Deliberately OVERRIDES a pause for that one run (passes --ignore-pause)
+#               and says so; the pause itself stays in place.
+#   run --dry-run   force a free planning cycle now regardless of mode (also overrides).
 #   arm-wake    (internal) schedule the NEXT pmset wake from the slot list. run-cycle.sh
 #               calls this every fire so the chain self-perpetuates; safe to run by hand.
 #
@@ -51,6 +56,10 @@ PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 UID_NUM="$(id -u)"
 MODE_FILE="$ORCH/state/mode"   # "live" -> dispatch for real; anything else/absent -> plan-only
 LEDGER="$ORCH/ledger.md"       # in-flight dispatches (worker/checker) — see live_dispatches
+# The DURABLE pause marker (issue #90). Present => paused, whatever launchd says: a bare
+# bootout only unloads the job from the current session, and launchd reloads every plist
+# in ~/Library/LaunchAgents at login. run-cycle.sh reads the same path and exits early.
+PAUSE_FILE="$ORCH/state/paused"
 
 # Dispatch FIRE times (24h, local) — the SINGLE source of truth for the schedule, read
 # from orchestrator.conf's SCHEDULE_SLOTS. This one list drives BOTH the pmset wake
@@ -63,6 +72,18 @@ LEDGER="$ORCH/ledger.md"       # in-flight dispatches (worker/checker) — see l
 SLOTS=($SCHEDULE_SLOTS)
 
 die() { echo "schedule: $*" >&2; exit 1; }
+
+# is_paused — 0 iff the durable pause marker exists. Only ever used in a conditional.
+is_paused() { [ -f "$PAUSE_FILE" ]; }
+# paused_since — the marker's recorded timestamp (or a placeholder if it's empty).
+paused_since() { local t; t="$(head -n 1 "$PAUSE_FILE" 2>/dev/null || true)"; echo "${t:-unknown time}"; }
+# launchd_disabled — 0 iff launchd's persistent disabled-services database has our label
+# marked disabled (`launchctl disable` writes it; it survives reboot). Best-effort parse:
+# the line reads `"<label>" => disabled` (or `=> true` on older releases).
+launchd_disabled() {
+  launchctl print-disabled "gui/$UID_NUM" 2>/dev/null \
+    | grep -F "\"$LABEL\"" | grep -qE '=>[[:space:]]*(disabled|true)'
+}
 
 # live_dispatches — echo the ledger lines for dispatches that are STILL RUNNING (status
 # `dispatched` AND a recorded pid that is still alive). These are the workers/checkers a
@@ -173,6 +194,15 @@ cmd_install() {
   echo "rendered $PLIST_DST from $PLIST_SRC (repo path: $ORCH)"
   # bootout any prior copy, then bootstrap the current one (modern launchctl verbs).
   launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
+  # Paused => install KEEPS the pause (issue #90): the plist is re-rendered so a later
+  # `resume` loads the current one, but it is NOT bootstrapped, the launchd disable flag
+  # is re-asserted, and pmset wakes are left alone. Only `resume` un-pauses.
+  if is_paused; then
+    launchctl disable "gui/$UID_NUM/$LABEL" 2>/dev/null || true
+    echo "PAUSED (since $(paused_since)) — install kept the pause: plist re-rendered but NOT loaded."
+    echo "      Run '$0 resume' to load it and start firing again."
+    return 0
+  fi
   launchctl bootstrap "gui/$UID_NUM" "$PLIST_DST" \
     && echo "agent bootstrapped: $LABEL" \
     || die "launchctl bootstrap failed (check the plist with: plutil -lint $PLIST_DST)"
@@ -254,9 +284,20 @@ cmd_disable() {
 }
 
 # --- pause / resume (stop firing entirely, e.g. while away) -------------------
-# Lighter than uninstall: leaves the symlink + pmset wakes in place so 'resume' is
+# Lighter than uninstall: leaves the plist + pmset wakes in place so 'resume' is
 # instant and sudo-free. The Mac may still wake at slot times and find nothing to run
 # (harmless — it just sleeps again); for a long absence, 'uninstall' also clears those.
+#
+# DURABLE (issue #90). A bare `launchctl bootout` only unloads the job from the current
+# launchd session; the plist stays in ~/Library/LaunchAgents and launchd reloads it at
+# the next login, so a reboot silently resumed the loop (observed live, 2026-09-30). Two
+# independent layers now hold the pause on disk:
+#   1. state/paused — the marker run-cycle.sh checks first and exits on (logging
+#      `paused — not running`), so even a job that gets loaded anyway (re-install, manual
+#      bootstrap, a launchd quirk) never jitters or dispatches. It is also the one
+#      source `status` / `pause` report from.
+#   2. `launchctl disable gui/<uid>/<label>` — launchd persists this override across
+#      reboots, so the job is not even loaded at login.
 cmd_pause() {
   local force=0
   [ "${1:-}" = "--force" ] && force=1
@@ -276,15 +317,55 @@ cmd_pause() {
     fi
     echo "⚠ --force: pausing with $n live dispatch(es) — bootout will SIGTERM them; any unpushed in-progress work is lost." >&2
   fi
-  launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null \
-    && echo "paused — timer unloaded; it won't fire until '$0 resume'. (Symlink + wakes left in place.)" \
-    || echo "already paused (timer not loaded)."
+  # Report from the durable state, never from whether bootout happened to succeed.
+  local was_paused=0
+  if is_paused; then
+    was_paused=1
+  else
+    mkdir -p "$(dirname "$PAUSE_FILE")"
+    date '+%Y-%m-%d %H:%M:%S' > "$PAUSE_FILE" || die "could not write $PAUSE_FILE — NOT paused."
+  fi
+  # Re-assert both launchd layers even when already paused, so a half-applied pause
+  # (e.g. the job was re-bootstrapped by hand) is repaired. Their results are reported
+  # as notes, not used to decide the headline.
+  local disable_note bootout_note
+  if launchctl disable "gui/$UID_NUM/$LABEL" 2>/dev/null; then
+    disable_note="launchd disable flag set (persists across reboot)"
+  else
+    disable_note="warn: 'launchctl disable' failed — relying on $PAUSE_FILE alone"
+  fi
+  if launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null; then
+    bootout_note="timer unloaded from this session"
+  else
+    bootout_note="timer was not loaded in this session"
+  fi
+  if [ "$was_paused" = 1 ]; then
+    echo "already paused (since $(paused_since); marker $PAUSE_FILE)."
+  else
+    echo "paused — durable across reboot/logout; it won't fire until '$0 resume'."
+  fi
+  echo "  $disable_note; $bootout_note. (Plist + wakes left in place.)"
 }
 cmd_resume() {
   [ -f "$PLIST_DST" ] || die "no installed plist to resume — run '$0 install' first."
-  launchctl bootstrap "gui/$UID_NUM" "$PLIST_DST" \
-    && echo "resumed — timer loaded; next fire at the upcoming slot." \
-    || echo "already running (timer loaded)."
+  local was_paused=0
+  is_paused && was_paused=1
+  rm -f "$PAUSE_FILE"
+  # enable BEFORE bootstrap: launchd refuses to bootstrap a disabled service.
+  launchctl enable "gui/$UID_NUM/$LABEL" 2>/dev/null \
+    || echo "warn: 'launchctl enable' failed — the launchd disable flag may still be set (see '$0 status')." >&2
+  if launchctl bootstrap "gui/$UID_NUM" "$PLIST_DST" 2>/dev/null; then
+    echo "resumed — pause cleared, timer loaded; next fire at the upcoming slot."
+  elif launchctl print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1; then
+    if [ "$was_paused" = 1 ]; then
+      echo "resumed — pause cleared; timer was already loaded; next fire at the upcoming slot."
+    else
+      echo "already running (timer loaded, not paused)."
+    fi
+  else
+    die "pause cleared, but 'launchctl bootstrap' failed and the timer is NOT loaded (check: plutil -lint $PLIST_DST)."
+  fi
+  return 0
 }
 
 cmd_uninstall() {
@@ -293,17 +374,34 @@ cmd_uninstall() {
   if command -v pmset >/dev/null; then
     sudo -n pmset repeat cancel 2>/dev/null && echo "pmset repeat cancelled" || echo "note: 'sudo pmset repeat cancel' to clear the recurring wake."
   fi
+  is_paused && echo "note: still PAUSED ($PAUSE_FILE kept) — a future '$0 install' stays paused until '$0 resume'."
   echo "done."
 }
 
 cmd_status() {
   echo "== launchd =="
-  if launchctl print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1; then
+  # Four distinct states, the pause read from its DURABLE source (state/paused) rather
+  # than inferred from "not loaded" (issue #90).
+  local loaded=0 disabled=0
+  launchctl print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1 && loaded=1
+  launchd_disabled && disabled=1
+  if is_paused; then
+    echo "PAUSED since $(paused_since) (durable: $PAUSE_FILE; '$0 resume' to un-pause)"
+    if [ "$disabled" = 1 ]; then
+      echo "  launchd disable flag: set (job not loaded at login)"
+    else
+      echo "  launchd disable flag: NOT set — run-cycle.sh still exits on the marker; '$0 pause' re-asserts it"
+    fi
+    [ "$loaded" = 1 ] && echo "  ⚠ job is loaded anyway — fires will log 'paused — not running' and exit"
+  elif [ ! -f "$PLIST_DST" ]; then
+    echo "NOT installed (no $PLIST_DST; run: $0 install)"
+  elif [ "$loaded" = 1 ]; then
     echo "loaded: $LABEL"
     launchctl print "gui/$UID_NUM/$LABEL" 2>/dev/null \
       | grep -E 'state =|last exit code =|runs =' | sed 's/^/  /'
   else
-    echo "NOT loaded (run: $0 install)"
+    echo "installed but NOT loaded, and not paused (run: $0 install, or $0 resume)"
+    [ "$disabled" = 1 ] && echo "  ⚠ launchd disable flag is set without a pause marker — '$0 resume' clears it"
   fi
   local plist_state="absent"
   if [ -f "$PLIST_DST" ]; then
@@ -366,13 +464,21 @@ cmd_status() {
 # so a hand sweep fires now rather than sleeping the 0–30 min the scheduled path adds.
 # It RESPECTS the current mode (live dispatches; plan-only just plans) — same as a
 # scheduled fire. Pass --dry-run to force a free preview regardless of mode.
+#
+# A pause (state/paused) is DELIBERATELY overridden here, for this one run only: typing
+# `run` is an explicit operator act, unlike a launchd fire. It passes --ignore-pause —
+# the only way past run-cycle.sh's pause gate — announces the override, and leaves the
+# pause in place for every scheduled fire.
 cmd_run() {
+  if is_paused; then
+    echo "note: scheduler is PAUSED (since $(paused_since)) — overriding for this one manual run; the pause stays in place."
+  fi
   if [ "${1:-}" = "--dry-run" ]; then
     echo "manual planning cycle (inline, no spend)…"
-    exec "$ORCH/bin/run-cycle.sh" --dry-run --no-arm
+    exec "$ORCH/bin/run-cycle.sh" --dry-run --no-arm --ignore-pause
   fi
   echo "running one cycle now (inline, immediate — no jitter; respects current mode)…"
-  exec "$ORCH/bin/run-cycle.sh" --no-arm
+  exec "$ORCH/bin/run-cycle.sh" --no-arm --ignore-pause
 }
 
 case "${1:-}" in

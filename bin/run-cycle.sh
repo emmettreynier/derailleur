@@ -20,9 +20,17 @@
 #      it every weeknight if it ever breaks.
 #   4. Timestamped logging to logs/cycle.log (launchd's own stdout/stderr also tee here).
 #
-# Usage: run-cycle.sh [--dry-run] [--no-arm]
-#   --dry-run  pass through to orchestrator-cycle.sh (plan only, spends nothing)
-#   --no-arm   don't arm the next pmset wake (for foreground/manual runs)
+# Usage: run-cycle.sh [--dry-run] [--no-arm] [--jitter] [--ignore-pause]
+#   --dry-run       pass through to orchestrator-cycle.sh (plan only, spends nothing)
+#   --no-arm        don't arm the next pmset wake (for foreground/manual runs)
+#   --jitter        sleep 0..JITTER_MAX_SECS before dispatch (scheduled fires only)
+#   --ignore-pause  run despite state/paused. ONLY `schedule.sh run` passes it — the
+#                   deliberate, documented manual override; launchd never does.
+#
+# Pause gate (issue #90): if state/paused exists (written by `schedule.sh pause`), exit 0
+# immediately — before the mode line, the wake arm, the usage gate, the jitter or any
+# dispatch — logging `paused — not running` to cycle.log. This is the layer that holds
+# even when launchd loads the job anyway (a reboot used to do exactly that).
 #
 # Plan-only vs live is a persistent toggle, not a plist edit: `schedule.sh live` /
 # `schedule.sh plan-only` write state/mode, which this script reads on every fire.
@@ -44,12 +52,14 @@ ARGS=()
 ARM=1
 JITTER=0
 IS_DRY=0
+IGNORE_PAUSE=0
 [ "${ORCH_DRY:-0}" = 1 ] && { ARGS+=(--dry-run); IS_DRY=1; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) ARGS+=(--dry-run); IS_DRY=1 ;;
     --no-arm)  ARM=0 ;;
     --jitter)  JITTER=1 ;;   # scheduled fires pass this; manual/dry runs stay immediate
+    --ignore-pause) IGNORE_PAUSE=1 ;;   # schedule.sh run only — see the pause gate below
     *) echo "run-cycle: unknown arg $1" >&2; exit 2 ;;
   esac; shift
 done
@@ -65,6 +75,18 @@ RESET_FILE="$STATE_DIR/usage-reset"
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 say() { echo "[$(ts)] $*" | tee -a "$CYCLE_LOG"; }
+
+# 0. Pause gate — FIRST, so a paused scheduler neither spends, sleeps, nor re-arms the
+# wake chain. Same path schedule.sh writes (PAUSE_FILE there).
+PAUSE_FILE="$STATE_DIR/paused"
+if [ -f "$PAUSE_FILE" ]; then
+  PAUSED_SINCE="$(head -n 1 "$PAUSE_FILE" 2>/dev/null || true)"
+  if [ "$IGNORE_PAUSE" = 0 ]; then
+    say "paused — not running (state/paused since ${PAUSED_SINCE:-unknown time}; \`schedule.sh resume\` to un-pause, \`schedule.sh run\` overrides once)"
+    exit 0
+  fi
+  say "paused (since ${PAUSED_SINCE:-unknown time}) — OVERRIDDEN for this manual run (--ignore-pause); the pause stays in place"
+fi
 
 # Resolve plan-only vs live. An explicit --dry-run / ORCH_DRY=1 already forced
 # plan-only above; otherwise the persistent toggle (state/mode, set by
