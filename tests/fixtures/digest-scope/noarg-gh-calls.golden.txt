@@ -1,0 +1,4 @@
+project item-list 1 --owner @me --format json --limit 1000
+search issues --owner test-operator --state closed --json number,repository,closedAt --limit 100
+pr list -R test-operator/alpha --state open --json number,title,url,isDraft,reviewDecision,headRefName,closingIssuesReferences,labels,commits,comments
+pr list -R test-operator/beta --state open --json number,title,url,isDraft,reviewDecision,headRefName,closingIssuesReferences,labels,commits,comments
