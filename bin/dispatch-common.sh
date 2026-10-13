@@ -396,6 +396,66 @@ print(len(rounds) - (last_handoff + 1))
   return 0
 }
 
+# NO_FINISH_LEADS — the worker-side twin of CHECKER_ROUND_LEADS: the two no-clean-finish
+# leads finalize_dispatch posts on an issue. Moved here from bin/ledger-prune.sh (issue
+# #91) so the cycle's WORKER_LIMIT accounting and the interactive path's round check
+# (bin/round-cap.sh) read ONE classifier instead of two that could drift.
+#
+# Both are capped — an exit-to-wait used to be invisible to WORKER_LIMIT entirely, so a
+# wedged tmux job re-dispatched every cycle forever (issue #40) — but SEPARATELY,
+# because their retry cost differs by orders of magnitude:
+#
+#   wait class   `**Worker incomplete: incomplete-waiting` — a babysit handoff. The
+#                brief TELLS the worker to exit while a detached tmux job runs; the
+#                retry reattaches, sees the job running, and exits again for cents.
+#                Loose cap (WORKER_WAIT_LIMIT) so legitimate multi-session progress on
+#                a long run isn't escalated as a malfunction — but still capped, since
+#                exempting it would reopen the very hole #40 closed (a job alive but
+#                never finishing would re-dispatch forever with no backstop).
+#   hard class   every `**Worker interrupted:` (cut off — a full WORKER_BUDGET already
+#                burned) and every OTHER incomplete reason (`uncommitted`, `unpushed`,
+#                `nopr`, `draft`, `conflicting` — the session exited having
+#                malfunctioned or left an unmergeable PR, not having handed off).
+#                Tight cap (WORKER_LIMIT). Membership is by DEFAULT, not by an
+#                enumeration: anything that isn't the wait lead lands here, so a new
+#                reason token is hard-class unless deliberately exempted (issue #51).
+#
+# Classification reads the reason token out of the comment lead and nothing else — no
+# tmux probe, no filesystem timestamps — so it is a pure comment-history reader.
+NO_FINISH_LEADS='**Worker interrupted:
+**Worker incomplete:'
+
+# worker_no_finish_counts — reads `gh issue view <n> --json comments` JSON on STDIN and
+# echoes "<hard> <wait>": how many no-clean-finish comments sit at the END of the
+# issue's history with nothing else after them, split per the classes above. Any
+# intervening comment (a milestone, a checker verdict, a human reply) resets BOTH — the
+# same "per generation" idea checker_rounds_this_generation uses.
+#
+# Fails soft like its checker twin: unreadable/unparseable input echoes "0 0". A caller
+# that must tell "zero" from "unknown" validates the JSON itself first (round-cap.sh).
+worker_no_finish_counts() {
+  NO_FINISH_LEADS="$NO_FINISH_LEADS" python3 -c '
+import sys, json, os, re
+leads = tuple(l for l in os.environ["NO_FINISH_LEADS"].split("\n") if l)
+wait_re = re.compile(r"^\*\*Worker incomplete:\s*(?:incomplete-)?waiting\b")
+try:
+    comments = json.load(sys.stdin).get("comments", [])
+except Exception:
+    print("0 0"); sys.exit()
+hard = wait = 0
+for c in reversed(comments):
+    body = c.get("body") or ""
+    if not body.startswith(leads):
+        break
+    if wait_re.match(body):
+        wait += 1
+    else:
+        hard += 1
+print(hard, wait)
+' 2>/dev/null || echo "0 0"
+  return 0
+}
+
 # finalize_dispatch <log> <ledger> <pid> <worktree> <kind> — run AFTER the claude
 # process exits: classify the outcome, record it in the ledger, and on anything short
 # of a clean finish warn loudly + push commits the re-dispatch would otherwise strand.

@@ -534,53 +534,28 @@ def issue_comments(repo, num):
         pass
     return None  # unknown -> don't touch
 
-# Both no-clean-finish leads finalize_dispatch can post (dispatch-common.sh). Both are
-# capped — an exit-to-wait used to be invisible to WORKER_LIMIT entirely, so a wedged
-# tmux job re-dispatched every cycle forever (issue #40) — but they are capped
-# SEPARATELY, because their retry cost differs by orders of magnitude:
-#
-#   wait class   `**Worker incomplete: incomplete-waiting` — a babysit handoff. The
-#                brief TELLS the worker to exit while a detached tmux job runs; the
-#                retry reattaches, sees the job running, and exits again for cents.
-#                Loose cap (WORKER_WAIT_LIMIT) so legitimate multi-session progress on
-#                a long run isn't escalated as a malfunction — but still capped, since
-#                exempting it would reopen the very hole #40 closed (a job alive but
-#                never finishing would re-dispatch forever with no backstop).
-#   hard class   every `**Worker interrupted:` (cut off — a full WORKER_BUDGET already
-#                burned) and every OTHER incomplete reason (`uncommitted`, `unpushed`,
-#                `nopr`, `draft`, `conflicting` — the session exited having
-#                malfunctioned or left an unmergeable PR, not having handed off).
-#                Tight cap (WORKER_LIMIT). Membership is by DEFAULT, not by an
-#                enumeration: anything that isn't the wait lead lands here, so a new
-#                reason token is hard-class unless deliberately exempted (issue #51).
-#
-# Classification reads the reason token out of the comment lead and nothing else — no
-# tmux probe, no filesystem timestamps. This script runs at cycle start and stays a pure
-# comment-history reader, so it must not depend on live session state.
-NO_FINISH_LEADS = ("**Worker interrupted:", "**Worker incomplete:")
-WAIT_LEAD_RE = re.compile(r"^\*\*Worker incomplete:\s*(?:incomplete-)?waiting\b")
-
+# The no-clean-finish classifier (the two leads, the wait/hard split, the trailing-run
+# reset) lives in bin/dispatch-common.sh as NO_FINISH_LEADS + worker_no_finish_counts,
+# next to its checker twin — read the class rationale there. This script shells back
+# into it rather than keeping a Python copy (issue #91): the interactive round check,
+# bin/round-cap.sh, reads the same helper, and two copies of one classifier are a thing
+# that drifts (the #52/#83 failure mode).
 def trailing_no_finish_counts(repo, num):
-    """How many `**Worker interrupted:` / `**Worker incomplete:` comments (posted by
-    finalize_dispatch, see dispatch-common.sh) sit at the END of the issue's comment
-    history with nothing else after them, split into (hard, wait) per the classes above.
-    Any intervening comment (a milestone, a checker verdict, a human reply) resets BOTH
-    — the same 'per generation' idea CHECKER_LIMIT uses for verdict comments, so a
-    genuinely-progressing issue never gets penalized for an interruption two rounds
-    ago."""
+    """(hard, wait) trailing no-clean-finish counts for an issue, or None when the
+    comments (or the shared counter) can't be read — None means "don't touch"."""
     comments = issue_comments(repo, num)
     if comments is None:
         return None
-    hard = wait = 0
-    for c in reversed(comments):
-        body = c.get("body") or ""
-        if not body.startswith(NO_FINISH_LEADS):
-            break
-        if WAIT_LEAD_RE.match(body):
-            wait += 1
-        else:
-            hard += 1
-    return hard, wait
+    try:
+        r = subprocess.run(
+            ["bash", "-c", 'source "$1/bin/dispatch-common.sh"; worker_no_finish_counts',
+             "ledger-prune", os.environ["ORCH"]],
+            input=json.dumps({"comments": comments}),
+            capture_output=True, text=True, timeout=30)
+        hard, wait = (int(x) for x in r.stdout.split())
+        return hard, wait
+    except Exception:
+        return None
 
 def escalate_needs_input(repo, num, n, limit, knob, what, also=""):
     """Post the ONE escalation comment for this prune. `also` is the *other* class's
