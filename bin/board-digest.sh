@@ -31,11 +31,37 @@
 # Usage:
 #   ./board-digest.sh              # whole board, scoped to all onboarded repos
 #   ./board-digest.sh <slug>       # scoped to one onboarded repo (e.g. solar-income)
+#   ./board-digest.sh all          # whole board, explicitly (`all` is reserved — #91)
+#   ./board-digest.sh --here [<slug>|all]
+#                                  # no slug: the onboarded repo the CWD belongs to
+#                                  # (whole board, with a header note, if none)
+#
+# SCOPE (issue #91). `--here` is OPT-IN and only supplies a DEFAULT: it applies when no
+# slug follows it, so `/orchestrate` can always send `--here $ARGUMENTS` and let this
+# script own every scope decision — empty = this repo, `all` = whole board, `<slug>` =
+# that repo. An EMPTY argument list is untouched by all of this (it never reads the
+# cwd): orchestrator-cycle.sh relies on it meaning "whole board", and
+# tests/offline/test-digest-scope.sh pins its output and gh calls to a pre-#91 golden.
 set -euo pipefail
 
 OWNER="@me"
 DONE_DAYS="${DONE_DAYS:-7}"
-SLUG_FILTER="${1:-${DIGEST_SLUG:-}}"   # positional arg beats DIGEST_SLUG; empty = all
+HERE=0
+SLUG_ARG=""
+SLUG_GIVEN=0
+for a in "$@"; do
+  case "$a" in
+    --here) HERE=1 ;;
+    *)      SLUG_ARG="$a"; SLUG_GIVEN=1 ;;
+  esac
+done
+SLUG_FILTER="${SLUG_ARG:-${DIGEST_SLUG:-}}"   # positional arg beats DIGEST_SLUG; empty = all
+[ -n "${DIGEST_SLUG:-}" ] && SLUG_GIVEN=1     # an explicit env scope also beats --here
+# `all` is the reserved whole-board word (bin/new-project.sh refuses to onboard a repo
+# by that name), so it can never shadow a real slug. Case-insensitive, like `board: none`.
+case "$(printf '%s' "$SLUG_FILTER" | tr '[:upper:]' '[:lower:]')" in
+  all) SLUG_FILTER=""; SLUG_GIVEN=1 ;;
+esac
 ORCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LEDGER="$ORCH_DIR/ledger.md"
 # Operator identity (PR_OWNER, OPERATOR_NAME, BOARD_PROJECT, …) comes from orchestrator.conf.
@@ -72,6 +98,46 @@ gh search issues --owner "$PR_OWNER" --state closed \
 onboarded_slugs="$(ls "$ORCH_DIR/projects/"*.yml 2>/dev/null | xargs -n1 basename 2>/dev/null \
                      | sed 's/\.yml$//' | paste -sd, - || true)"
 
+# --here with no explicit slug: map the cwd to an onboarded slug (issue #91).
+# `git rev-parse --git-common-dir` names the MAIN repo's git dir even from a linked
+# worktree, so a dispatch worktree resolves to the clone it was cut from; its parent is
+# the clone root, matched (symlinks resolved on both sides) against each manifest's
+# `working_clone:`. Anything that doesn't resolve — not in a git repo, or a repo no
+# manifest claims (the hub) — falls back to the WHOLE board with a visible header line,
+# never an opaque failure. Purely local: no gh call.
+SCOPE_NOTE=""
+yml_scalar() {  # FILE KEY — the launchers' yml() grammar
+  sed -nE "s/^$2:[[:space:]]*(.+)/\1/p" "$1" \
+    | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//' | head -1
+}
+if [ "$HERE" = 1 ] && [ "$SLUG_GIVEN" = 0 ]; then
+  SLUG_FILTER=""
+  here_root=""
+  if common="$(git rev-parse --git-common-dir 2>/dev/null)" && [ -n "$common" ]; then
+    here_root="$(cd "$common/.." 2>/dev/null && pwd -P || true)"
+  fi
+  if [ -z "$here_root" ]; then
+    SCOPE_NOTE="cwd not onboarded — showing whole board (not inside a git repository)"
+  else
+    for f in "$ORCH_DIR/projects/"*.yml; do
+      [ -f "$f" ] || continue
+      wc_raw="$(yml_scalar "$f" working_clone)"
+      [ -n "$wc_raw" ] || continue
+      wc_abs="$(eval echo "$wc_raw")"            # ~ / $VAR, as the launchers' expand()
+      wc_abs="$(cd "$wc_abs" 2>/dev/null && pwd -P || true)"
+      if [ -n "$wc_abs" ] && [ "$wc_abs" = "$here_root" ]; then
+        SLUG_FILTER="$(basename "$f" .yml)"
+        break
+      fi
+    done
+    if [ -n "$SLUG_FILTER" ]; then
+      SCOPE_NOTE="scope: $SLUG_FILTER — resolved from the cwd (\`/orchestrate all\` for the whole board)"
+    else
+      SCOPE_NOTE="cwd not onboarded — showing whole board (repo \`$(basename "$here_root")\` matches no manifest's working_clone)"
+    fi
+  fi
+fi
+
 # Optional single-repo scope (arg or DIGEST_SLUG). Must be an onboarded slug —
 # a manifest at projects/<slug>.yml — else the orchestrator would be pointed at a
 # repo it can't dispatch on. Restrict the onboarded set to just that slug; the
@@ -106,7 +172,8 @@ fi
 BOARD_FILE="$BOARD_FILE" CLOSED_FILE="$CLOSED_FILE" PR_OWNER="$PR_OWNER" BOARD_LIMIT="$BOARD_LIMIT" \
 OPERATOR_NAME="$OPERATOR_NAME" SCHEDULED_ALLOW="$scheduled_allow" TMUX_LIVE="$tmux_live" \
 LEDGER="$LEDGER" DONE_DAYS="$DONE_DAYS" ONBOARDED_SLUGS="$onboarded_slugs" \
-PROJECTS_DIR="$ORCH_DIR/projects" OFFBOARD_LIMIT="${OFFBOARD_LIMIT:-200}" python3 <<'PY'
+PROJECTS_DIR="$ORCH_DIR/projects" OFFBOARD_LIMIT="${OFFBOARD_LIMIT:-200}" \
+SCOPE_NOTE="$SCOPE_NOTE" python3 <<'PY'
 import json, os, re, subprocess, sys
 from datetime import datetime, timezone, timedelta
 
@@ -469,6 +536,8 @@ if board_truncated:
       f"routing labels are read from the board they read as *unlabelled*: their PRs are "
       f"misrouted (a `checked-pass` PR is sent back to a checker, `hold`/`blocked` stop "
       f"parking work). Re-run with a higher `BOARD_LIMIT` before acting on anything below.")
+if os.environ.get("SCOPE_NOTE"):   # --here only (issue #91); absent => byte-identical
+    w(f"_{os.environ['SCOPE_NOTE']}_")
 w(f"_Scoped to onboarded repos ({', '.join(sorted(onboarded)) or 'none'}) — the orchestrator's dispatchable world._")
 if paused:
     w(f"_Autonomous-dispatch allow-list active — repos marked ⏸ scheduler-paused "

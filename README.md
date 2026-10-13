@@ -255,6 +255,22 @@ worktree's own `projects/` is gitignored and empty — the sweep prints the coun
 and `SKIP`s loudly at zero rather than passing vacuously); and, end to end with
 `raw_resolved` neutralised so no blanket prefix can mask it, a Write under a `raw_paths`
 entry that follows a comment line is **denied**.
+The **`/orchestrate` scope and auto-chain** (issue #91): `board-digest.sh --here` from a
+working clone, a dispatch worktree of it and a subdirectory all resolve to the same slug,
+while a git repo with no manifest and a non-git directory render the whole board with the
+`cwd not onboarded` header line; `all` (any case, with or without `--here`) equals no
+argument; and a no-argument run — output **and** every `gh` call — is byte-identical to a
+golden recorded from the pre-#91 script (`tests/fixtures/digest-scope/`), from inside an
+onboarded clone too (`test-digest-scope.sh`); `dr new-project owner/all` exits nonzero
+naming the reserved word with zero `gh`/`git` calls, no manifest and no directories
+(`test-new-project-reserved.sh`); `round-cap.sh` allows at 3 and refuses at 4 counted
+rounds for `CHECKER_LIMIT=4` and `WORKER_LIMIT=4`, counts `incomplete-waiting` only
+against `WORKER_WAIT_LIMIT`, reports a failing or garbage `gh` as `unknown` rather than
+zero, reuses the shared counters, and makes only comment *reads*
+(`test-interactive-round-cap.sh`); and the command source + brief carry the new
+description/hint, `dr round-cap` in `allowed-tools`, no `gh pr merge` there, the
+`--here` injection, the chaining contract, every stop condition with `incomplete-waiting`
+excluded, and the unchanged merge section (`test-orchestrate-command.sh`).
 If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
 and is byte-identical before/after.
 
@@ -446,23 +462,52 @@ checkout, **re-run `./bin/install.sh` if you move the repo** — same as `/orche
 
 ### Interactive orchestrator (human-gated)
 
-Turn any interactive `claude` session — in **any** repo — into an orchestrator that
-loads board state and proposes what to dispatch, acting only on your explicit OK:
+Turn any interactive `claude` session — in **any** repo — into an orchestrator. **You
+choose what gets worked on and whether it merges; the orchestrator runs the rounds in
+between:**
 
 ```bash
-/orchestrate            # whole board: propose worker + checker dispatches, wait for your "go"
-/orchestrate solar-income   # scope the view to one onboarded repo
+/orchestrate                # THIS repo (the onboarded repo the session's cwd belongs to)
+/orchestrate all            # the whole board
+/orchestrate solar-income   # one named onboarded repo
 ```
 
-Rendered into `~/.claude/commands/` by `install.sh` (the one `~/.claude/` carve-out).
-It **proposes, then dispatches workers and checkers only after you confirm** — never
-autonomously, and it never merges on its own initiative: a `checked-pass` PR is
+**Scope.** With no argument the digest is scoped to the repo you are standing in — a
+dispatch worktree or a subdirectory resolves to its parent clone, matched against each
+manifest's `working_clone`. From a repo that is not onboarded (e.g. the hub), or from
+outside any git repo, it shows the whole board and says so in its header
+(`cwd not onboarded — showing whole board`). `all` is a reserved word: `dr new-project`
+refuses to onboard a repo named `all`. Under the hood the command runs
+`dr board-digest --here $ARGUMENTS`; `dr board-digest` with no argument is unchanged
+(whole board), which is what the autonomous cycle uses.
+
+**Dispatch.** It **proposes the opening batch** (which issues get a worker, which PRs a
+checker) and dispatches nothing until you say "go". After that one "go" it **runs the
+follow-up rounds itself** on the approved items only — a checker when a worker's PR goes
+ready, a worker when a checker hands the PR back — until each is a ready PR carrying
+`checked-pass`, which it reports with any `actor: operator` findings as your merge
+decision. It never starts an item you did not approve. Before every follow-up it runs
+`dr round-cap worker|checker <slug> <n>`, which applies the cycle's own `CHECKER_LIMIT` /
+`WORKER_LIMIT` / `WORKER_WAIT_LIMIT` to the same GitHub-comment counters (read-only:
+exit 0 allow, 3 refuse, 1 could-not-count). It **stops and asks**, naming the reason, on
+a `needs-input` / `needs-definition` / `hold` / `blocked` label, a `blocked` verdict, a
+tripped round cap (it does not label the issue itself — you are there), any
+`interrupted-*` or `incomplete-*` outcome except `incomplete-waiting` (it keeps watching
+a worker that exited to wait on its tmux job), a `CONFLICTING` PR, or a launcher exiting
+nonzero. Say "go, but don't chain" for a single round. The per-repo autonomous allow-list
+(`dr schedule enable/disable`) deliberately does not apply here — you approved the batch
+in person.
+
+**Merge.** Unchanged: it never merges on its own initiative. A `checked-pass` PR is
 surfaced, not acted on, unless you instruct the merge in-session naming that PR (one
-instruction, exactly that PR). Its tools are scoped to the board digest, the two
-launchers, read-only `gh`, and the `Monitor` + `watch-dispatch` tools (so it can watch
-the workers/checkers it dispatched to completion without blocking your session). For a
-session booted from
-this checkout with the digest pre-injected (same posture), use
+instruction, exactly that PR), and `gh pr merge` is not in its `allowed-tools`, so even
+then the harness asks you to confirm the exact command.
+
+Rendered into `~/.claude/commands/` by `install.sh` (the one `~/.claude/` carve-out).
+Its tools are scoped to the board digest, the two launchers, `dr round-cap`, read-only
+`gh`, and the `Monitor` + `watch-dispatch` tools (so it can watch the workers/checkers it
+dispatched to completion without blocking your session). For a session booted from this
+checkout with the (whole-board) digest pre-injected (same posture), use
 `dr launch-orchestrator` instead.
 
 ### Extend an issue after review (`**Operator directive:`)
@@ -665,6 +710,7 @@ derailleur/
 │   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees (+ reap dead derail-* tmux sessions)
 │   ├── board-digest.sh            Deterministic board-state report (no LLM)
 │   ├── watch-dispatch.sh          Watch dispatched worker(s)/checker(s) to terminal state (local signals; no LLM)
+│   ├── round-cap.sh               Read-only round-cap check before an interactive follow-up dispatch
 │   └── test.sh                    Two-tier test-suite runner (surfaced as `dr test`)
 ├── tests/                        Shell-layer test suite (framework-free bash)
 │   ├── lib/                          Shared assert + throwaway-sandbox helpers
