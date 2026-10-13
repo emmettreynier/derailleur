@@ -100,6 +100,11 @@ fi
 
 [ -d "$TESTS" ] || { echo "test.sh: no tests/ dir at $TESTS" >&2; exit 2; }
 
+# The offline tier's hermetic-env list + hermetic_unset (issue #101).
+# shellcheck source=/dev/null
+. "$TESTS/lib/hermetic.sh" \
+  || { echo "test.sh: cannot source $TESTS/lib/hermetic.sh" >&2; exit 2; }
+
 # Tally + failure tracking. We count PASS/SKIP/FAIL lines across all files (for the
 # summary) and separately track whether any OFFLINE file exited nonzero (the gate).
 total_pass=0 total_skip=0 total_fail=0
@@ -121,7 +126,14 @@ run_tier() {  # $1 = tier label (offline|online); $2 = dir
     echo "── ${tier}/$(basename "$f") ──"
     rc=0
     # Capture combined output so we can tally, while streaming it to the terminal.
-    out="$(bash "$f" 2>&1)" || rc=$?
+    # The OFFLINE tier runs with every operator/dispatch export stripped
+    # (tests/lib/hermetic.sh, issue #101), in a subshell so the online tier still sees
+    # the caller's environment — it reads the real conf on purpose.
+    if [ "$tier" = offline ]; then
+      out="$( hermetic_unset; bash "$f" 2>&1 )" || rc=$?
+    else
+      out="$(bash "$f" 2>&1)" || rc=$?
+    fi
     printf '%s\n' "$out"
     # Tally by counting the contract lines the assert lib prints.
     local p s fl

@@ -203,7 +203,13 @@ lifted for the file and `-e`/`-u`/`pipefail` restored after one that clears them
 switched on for a caller that lacked them); a file ending nonzero warns without aborting;
 and both launchers' `--dry-run` print the `machine env` line, `sourced` with the fixture's
 `QUARTO_CHROMIUM` or `absent` with it `<unset>`. The sandbox points
-`DERAILLEUR_MACHINE_ENV` at a nonexistent path, so no test reads the real file; and
+`DERAILLEUR_MACHINE_ENV` at a nonexistent path, so no test reads the real file; the
+**hermetic env** (`tests/offline/test-hermetic-env.sh`, issue #101): every name `bin/`
+really exports, every env var a host hook reads and every `orchestrator.conf.example` key
+is on the `tests/lib/hermetic.sh` list (or explicitly exempt), the real `bin/test.sh` run
+under all of them set to poison values hands none to an offline test but all to an online
+one, sourcing `sandbox.sh` drops them for a test run directly, and `test-digest-scope.sh`
+and `test-machine-env.sh` stay green under the poison; and
 the **routing-label invariant** (`tests/offline/test-routing-labels.sh`) — the three
 labels are mutually exclusive and `set_routing_label` is their one writer, so a stateful
 `gh` shim whose label set really honours `--add-label`/`--remove-label` pins both
@@ -311,6 +317,14 @@ testing /path/to/derailleur (12 files in tests/offline)
 
 Each test file is self-contained and can be run directly for debugging, e.g.
 `bash tests/offline/test-config-guard.sh`.
+
+**Hermetic offline tier.** The offline tier never sees the operator's environment.
+`config-common.sh` and the launchers export operator and dispatch settings
+(`SCHEDULED_REPOS_FILE`, `DIGEST_SLUG`, `QUARTO_CHROMIUM`, …), and every dispatched
+worker or checker inherits them, so `bin/test.sh` unsets the list in
+`tests/lib/hermetic.sh` before each offline file, and `tests/lib/sandbox.sh` does the
+same for a test run directly. The online tier keeps your environment. Adding an
+`export` to `bin/` fails `test-hermetic-env.sh` until the name is on that list.
 
 **How to read a failure:** each check prints a `PASS:` line; steps that need the
 network or `gh` auth print `SKIP:` and never fail the run. A failed assertion prints a
