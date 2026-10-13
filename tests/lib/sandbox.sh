@@ -31,6 +31,12 @@ _sandbox_cleanup() {
 }
 trap _sandbox_cleanup EXIT
 
+# Isolate every test from THIS machine's ~/.bootstrap_env.sh (issue #93): the launchers
+# source it on every run, --dry-run included, so without this a suite on the DGX would
+# load the real file and a launcher's output would vary by box. Points at a path that
+# cannot exist; test-machine-env.sh overrides it per call to exercise the real thing.
+export DERAILLEUR_MACHINE_ENV="$_SANDBOX_ROOT/no-machine-env"
+
 # new_sandbox — echo a fresh sandbox ORCH dir pre-scaffolded with the runtime layout
 # (bin/ logs/ projects/ state/ briefs/). Callers copy in only the scripts they need.
 new_sandbox() {

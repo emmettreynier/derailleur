@@ -125,6 +125,12 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
 - The interactive path enforces the round caps through `bin/round-cap.sh`, not the
   launchers (manual `dr launch-*` stays uncapped by design). It must stay read-only — a
   tripped cap there is stop-and-ask, never a label write.
+- Both launchers call `source_machine_env` (`bin/dispatch-common.sh`, issue #93) right
+  after sourcing `dispatch-common.sh`, before any `gh`/`git` call. It sources the
+  per-machine `~/.bootstrap_env.sh` (or `$DERAILLEUR_MACHINE_ENV`), because the dispatch
+  path's non-login `bash -c` shells never read `~/.profile`/`~/.bashrc`. A test that runs
+  a launcher must source `tests/lib/sandbox.sh`, which points `DERAILLEUR_MACHINE_ENV` at
+  a nonexistent path; otherwise the test loads the real file, and its output varies by machine.
 - Check `design.md`'s "Verified CLI capabilities" table before relying on a
   `claude` CLI flag — some (e.g. `--max-turns`) don't exist in the pinned version.
 - Any change to the safety model (hooks in `host/hooks/`, `--add-dir`,

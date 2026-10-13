@@ -160,8 +160,20 @@ to_epoch() {
     || printf ''
 }
 
+# GNU `stat -c` first: BSD stat rejects `-c` outright (exit 1, nothing on stdout).
+# The reverse order is broken on Linux, where `stat -f` means --file-system and '%m'
+# is read as a second FILE operand — it prints the fs block for "$1", fails on '%m',
+# and the fallback then APPENDS the mtime to that garbage (issue #92). So no branch
+# trusts an exit status alone: a candidate is accepted only if it is all digits.
 file_mtime() {  # $1 = path -> mtime in epoch seconds (0 if it can't be read)
-  stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo 0
+  local m
+  for m in "$(stat -c '%Y' "$1" 2>/dev/null)" "$(stat -f '%m' "$1" 2>/dev/null)"; do
+    case "$m" in
+      ''|*[!0-9]*) : ;;
+      *) printf '%s\n' "$m"; return 0 ;;
+    esac
+  done
+  echo 0
 }
 
 # --- parse each item into "kind slug num pid" (validates shape) ---------------
