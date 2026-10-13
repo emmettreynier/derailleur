@@ -144,8 +144,8 @@ assert_eq "$here_a" "$(digest_in "$WT" --here)" \
   "Resolution goes through git rev-parse --git-common-dir, so a worktree maps to its clone."
 assert_eq "$here_a" "$(digest_in "$CLONE/sub/dir" --here)" \
   "(c) --here from a subdirectory of the clone resolves to the same slug"
-assert_eq "$here_a" "$(digest_in "$CLONE" alpha --here)" \
-  "an explicit slug is accepted on either side of --here"
+assert_eq "$(digest_in "$NOGIT" alpha)" "$(digest_in "$CLONE" alpha --here)" \
+  "an explicit slug is accepted on either side of --here (and carries no cwd note)"
 
 here_beta="$(digest_in "$CLONE" --here beta)"
 assert_contains "$here_beta" "_Scoped to onboarded repos (beta)" \
