@@ -1144,6 +1144,21 @@ bootstrap_worktree_data() {
 # Steps run inside the new session, all output appended to <log>: the command, then
 # (checkers only) report_mutation, then finalize_dispatch. <mutation_baseline> is ""
 # for workers.
+#
+# The WHOLE chain's stdin/stdout/stderr are pointed at /dev/null and <log> on the exec
+# below, not just each inner step's (issue #100). Redirecting only the steps left the
+# session leader holding the launcher's inherited fds for its entire life: `eval` and
+# `finalize_dispatch` are a builtin and a function, so bash applies their `>>log` in the
+# leader itself and parks the originals on fds 10/11 until the step returns (lsof showed
+# the caller's pipe there, on the printed pid). Any reader waiting for EOF on the
+# launcher's output — `dr launch-worker … | tail`, `$(…)`, a tool harness — then waited
+# for the worker to exit. The inner redirects stay: same file, both O_APPEND, harmless.
+#
+# fds 0-2 are not the only way in. The launcher passes on EVERY fd it inherited, and a
+# harness can hand it more than three: CI's macOS runner left a pipe above fd 2 on the
+# leader (found by the test's lsof check), and a capture passed as `9>&1` blocked the
+# caller for the whole worker run, as the fd 0-2 leak did. So the setsid shim also closes
+# every fd >= 3 before it execs bash. Nothing in the chain reads an inherited fd above 2.
 run_in_new_session() {
   local log="$1" ledger="$2" worktree="$3" kind="$4" baseline="$5"; shift 5
   [ "${1:-}" = "--" ] && shift
@@ -1158,12 +1173,27 @@ run_in_new_session() {
 # if we already lead our own group we are already isolated from the parent group.
 if os.getpid() != os.getpgid(0):
     os.setsid()
+# Close every inherited fd >= 3: the exec redirect only covers 0-2 (issue #100).
+fds = None
+for d in ("/dev/fd", "/proc/self/fd"):
+    try:
+        fds = [int(f) for f in os.listdir(d)]
+        break
+    except OSError:
+        pass
+for fd in (fds if fds is not None else range(3, 1024)):
+    if fd > 2:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 os.execvp(sys.argv[1], sys.argv[1:])' \
       bash -c '
 source "$RIS_ORCH/dispatch-common.sh"
 cd "$RIS_WT" && eval "$RIS_CMD" >>"$RIS_LOG" 2>&1 || true
 [ "$RIS_KIND" = checker ] && report_mutation "$RIS_WT" "$RIS_BASE" >>"$RIS_LOG" 2>&1
-finalize_dispatch "$RIS_LOG" "$RIS_LEDGER" "$$" "$RIS_WT" "$RIS_KIND" >>"$RIS_LOG" 2>&1'
+finalize_dispatch "$RIS_LOG" "$RIS_LEDGER" "$$" "$RIS_WT" "$RIS_KIND" >>"$RIS_LOG" 2>&1' \
+      </dev/null >>"$log" 2>&1
 }
 
 # source_machine_env — load the machine's shared shell environment into the LAUNCHER
