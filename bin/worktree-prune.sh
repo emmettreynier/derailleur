@@ -31,6 +31,13 @@
 # Same housekeeping instinct, different derivative: a finished `dr tmux-run` job leaves
 # its session behind on purpose, and nothing else ever clears it.
 #
+# REMOVING A MERGED WORKTREE ALSO PURGES ITS REVIEW FOLDER (issue #98). When the slug's
+# manifest sets `review_dest:` (where bin/publish-review.sh copies a ready PR's rendered
+# output), removing the worktree of merged PR N runs `rclone purge <review_dest>/pr-N` —
+# never anything wider. A missing folder is a silent no-op; a failed purge warns and
+# changes neither the removal nor the exit status. A slug without the key makes zero
+# rclone calls. Closed-unmerged PRs keep their worktree, so their folder persists too.
+#
 # Usage: worktree-prune.sh [--auto] [--dry-run] [--force]
 #   (no args)  interactive picker (needs a terminal)
 #   --auto     non-interactive: remove merged+clean worktrees, report the rest;
@@ -67,6 +74,18 @@ done
 yml() { sed -nE "s/^$2:[[:space:]]*(.+)/\1/p" "$1" \
           | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//' | head -1; }
 expand() { eval echo "$1"; }   # ~ and $VAR expansion for path fields
+
+# review_dest_of <manifest> — the trimmed `review_dest:` value, or empty. The same reader
+# as bin/publish-review.sh (keep the two in step): the yml() grammar above, plus
+# whitespace trimmed, a bare-comment value read as unset, and trailing `/` dropped.
+review_dest_of() {
+  local v
+  v="$(yml "$1" review_dest)"
+  v="$(printf '%s' "$v" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  case "$v" in '#'*) v="" ;; esac
+  while [ "${v%/}" != "$v" ]; do v="${v%/}"; done
+  printf '%s' "$v"
+}
 
 # ---------------------------------------------------------------------------
 # compute_status <repo> <working_clone> <wt> <branch> <num>
@@ -125,11 +144,16 @@ compute_status() {
 
 # each_worktree <callback> — iterate every issue-N worktree across onboarded
 # projects, calling <callback> <repo> <working_clone> <wt> <branch> <num>.
+# Before each callback CUR_REVIEW_DEST holds that slug's review_dest (empty if unset);
+# REVIEW_ANY=1 once any onboarded slug sets one (it gates the review summary line).
+CUR_REVIEW_DEST=""; REVIEW_ANY=0
 each_worktree() {
   local cb="$1" f repo working_clone worktrees_dir wt branch num
   shopt -s nullglob
   for f in "$ORCH"/projects/*.yml; do
     [ -f "$f" ] || continue
+    CUR_REVIEW_DEST="$(review_dest_of "$f")"
+    [ -n "$CUR_REVIEW_DEST" ] && REVIEW_ANY=1
     repo="$(yml "$f" repo)"
     working_clone="$(expand "$(yml "$f" working_clone)")"
     worktrees_dir="$(expand "$(yml "$f" worktrees_dir)")"
@@ -163,6 +187,39 @@ remove_worktree() {  # <working_clone> <wt> <branch> <repo> [force]
   echo "  ⚠ remove refused for $wt (try --force)"; return 1
 }
 
+# ---------------------------------------------------------------------------
+# purge_review <review_dest> <merged_pr#> — remove <review_dest>/pr-<n> after its
+# worktree was removed. Called only for a MERGED PR. Never fails the caller.
+#
+# Scope guard: the target is always exactly `<dest>/pr-<n>`, and both halves are
+# validated first — an empty dest or a non-numeric n would widen `rclone purge` to the
+# whole review tree (or worse), so either one is a no-op. rclone's documented exit 3
+# ("directory not found") — or that phrase on stderr — is the silent missing-folder case.
+# --dry-run reports `would purge` and runs nothing.
+# ---------------------------------------------------------------------------
+REVIEW_PURGED=0
+purge_review() {
+  local dest="$1" n="$2" target rc=0 err
+  [ -n "$dest" ] || return 0
+  case "$n" in ''|*[!0-9]*) return 0 ;; esac
+  target="$dest/pr-$n"
+  if [ "$DRY" = 1 ]; then
+    echo "  would purge $target"; REVIEW_PURGED=$((REVIEW_PURGED+1)); return 0
+  fi
+  if ! command -v rclone >/dev/null 2>&1; then
+    echo "  ⚠ review purge skipped for $target: rclone not found"; return 0
+  fi
+  err="$(rclone purge "$target" 2>&1 >/dev/null)" || rc=$?
+  if [ "$rc" = 0 ]; then
+    echo "  purged review folder $target"; REVIEW_PURGED=$((REVIEW_PURGED+1))
+  elif [ "$rc" = 3 ] || printf '%s' "$err" | grep -qi 'directory not found'; then
+    :   # nothing was published for this PR — silent
+  else
+    echo "  ⚠ review purge failed for $target (rclone exit $rc): $(printf '%s' "$err" | head -1)"
+  fi
+  return 0
+}
+
 # ===========================================================================
 # AUTO MODE — non-interactive; remove merged+clean only.
 # ===========================================================================
@@ -172,10 +229,14 @@ auto_cb() {
   local repo="$1" clone="$2" wt="$3" branch="$4"
   if [ "$ST_SAFE" = 1 ]; then
     if [ "$DRY" = 1 ]; then
-      echo "  would remove ${repo##*/} $branch — $ST_REASON"; AUTO_REMOVED=$((AUTO_REMOVED+1)); return
+      echo "  would remove ${repo##*/} $branch — $ST_REASON"; AUTO_REMOVED=$((AUTO_REMOVED+1))
+      purge_review "$CUR_REVIEW_DEST" "$ST_MERGED_PR"
+      return
     fi
     if remove_worktree "$clone" "$wt" "$branch" "$repo" "$FORCE"; then
-      AUTO_REMOVED=$((AUTO_REMOVED+1)); else AUTO_KEPT=$((AUTO_KEPT+1)); fi
+      AUTO_REMOVED=$((AUTO_REMOVED+1))
+      purge_review "$CUR_REVIEW_DEST" "$ST_MERGED_PR"
+    else AUTO_KEPT=$((AUTO_KEPT+1)); fi
   else
     echo "  keep ${repo##*/} $branch — $ST_REASON"; AUTO_KEPT=$((AUTO_KEPT+1))
   fi
@@ -248,16 +309,30 @@ run_auto() {
       echo "worktree-prune: tmux: reaped $TMUX_REAPED dead derail-* sessions, left $TMUX_ALIVE alive"
     fi
   fi
+  review_summary
+}
+
+# review_summary — one tail line for the review purge, only when some slug sets
+# review_dest (so a machine that never publishes sees today's output unchanged).
+review_summary() {
+  [ "$REVIEW_ANY" = 1 ] || return 0
+  if [ "$DRY" = 1 ]; then
+    echo "worktree-prune: review: would purge $REVIEW_PURGED pr-* folder(s)"
+  else
+    echo "worktree-prune: review: purged $REVIEW_PURGED pr-* folder(s)"
+  fi
+  return 0
 }
 
 # ===========================================================================
 # INTERACTIVE MODE — list, then pick.
 # ===========================================================================
-declare -a WT_PATH WT_CLONE WT_BRANCH WT_REPO WT_DISP WT_DISK WT_REASON WT_SAFE
+declare -a WT_PATH WT_CLONE WT_BRANCH WT_REPO WT_DISP WT_DISK WT_REASON WT_SAFE WT_DEST WT_MPR
 gather_cb() {
   compute_status "$@"
   local repo="$1" clone="$2" wt="$3" branch="$4"
   WT_PATH+=("$wt"); WT_CLONE+=("$clone"); WT_BRANCH+=("$branch"); WT_REPO+=("$repo")
+  WT_DEST+=("$CUR_REVIEW_DEST"); WT_MPR+=("$ST_MERGED_PR")
   WT_DISP+=("${repo##*/}/$branch")
   WT_DISK+=("$(du -sh "$wt" 2>/dev/null | cut -f1 || echo '?')")
   WT_REASON+=("$ST_REASON"); WT_SAFE+=("$ST_SAFE")
@@ -308,19 +383,26 @@ run_interactive() {
     [ "$idx" -ge 1 ] && [ "$idx" -le "$n" ] 2>/dev/null || { echo "  (skip out-of-range: $idx)"; continue; }
     local j=$((idx-1))
     if [ "${WT_SAFE[$j]}" = 1 ]; then
-      remove_worktree "${WT_CLONE[$j]}" "${WT_PATH[$j]}" "${WT_BRANCH[$j]}" "${WT_REPO[$j]}" 0 && removed=$((removed+1))
+      if remove_worktree "${WT_CLONE[$j]}" "${WT_PATH[$j]}" "${WT_BRANCH[$j]}" "${WT_REPO[$j]}" 0; then
+        removed=$((removed+1)); purge_review "${WT_DEST[$j]}" "${WT_MPR[$j]}"
+      fi
     else
       # Risky: surface the reason and require explicit confirmation; force the remove
       # (git would refuse) only on a yes.
       printf '  ⚠ %s — %s.\n    Delete anyway (may lose local work)? [y/N]: ' "${WT_DISP[$j]}" "${WT_REASON[$j]}"
       local ans; read -r ans || ans=n
       case "$ans" in
-        [yY]*) remove_worktree "${WT_CLONE[$j]}" "${WT_PATH[$j]}" "${WT_BRANCH[$j]}" "${WT_REPO[$j]}" 1 && removed=$((removed+1)) ;;
+        [yY]*)
+          if remove_worktree "${WT_CLONE[$j]}" "${WT_PATH[$j]}" "${WT_BRANCH[$j]}" "${WT_REPO[$j]}" 1; then
+            # purge_review no-ops on an empty WT_MPR, so only a MERGED PR's folder goes.
+            removed=$((removed+1)); purge_review "${WT_DEST[$j]}" "${WT_MPR[$j]}"
+          fi ;;
         *) echo "    skipped ${WT_DISP[$j]}" ;;
       esac
     fi
   done
   echo "worktree-prune: removed $removed of $n."
+  review_summary
 }
 
 case "$MODE" in
