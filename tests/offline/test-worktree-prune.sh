@@ -176,6 +176,9 @@ rc=0; [ -f "$LOGS/rc-\$n" ] && rc="\$(cat "$LOGS/rc-\$n")"
 case "\$rc" in
   0) ;;
   3) echo "ERROR : Attempt 1/3 failed with 1 errors and: directory not found" >&2 ;;
+  # nf1: the REAL Dropbox missing-folder result the operator observed on the DGX
+  # (rclone v1.75.1): exit 1 with \`path_lookup/not_found/\` on stderr.
+  nf1) echo "path_lookup/not_found/" >&2; rc=1 ;;
   *) echo "ERROR : Failed to purge: permission denied" >&2 ;;
 esac
 exit "\$rc"
@@ -209,7 +212,7 @@ RDEST='dropbox:example-area/rev/review'
 SBR="$(new_sandbox)"
 sandbox_copy_script "$SBR" worktree-prune
 sandbox_copy_script "$SBR" dispatch-common
-build_project "$SBR" rev 1 2 3 9
+build_project "$SBR" rev 1 2 3 4 9
 echo "review_dest: $RDEST   # synthetic" >>"$SBR/projects/rev.yml"
 build_project "$SBR" plain 5
 WTR="$SBR/bin/worktree-prune.sh"
@@ -218,13 +221,13 @@ WTR="$SBR/bin/worktree-prune.sh"
 reset_logs; echo 9 >"$LOGS/unmerged"
 rc=0; out="$(PATH="$SHIMS:$PATH" "$WTR" --auto --dry-run 2>&1)" || rc=$?
 assert_rc 0 "$rc" "review: --auto --dry-run exits 0 with review_dest set"
-for n in 1 2 3; do
+for n in 1 2 3 4; do
   assert_contains "$out" "would purge $RDEST/pr-10$n" "review: --dry-run reports would purge pr-10$n"
 done
 assert_not_contains "$out" "pr-109" "review: --dry-run never purges an UNMERGED PR's folder"
 assert_not_contains "$out" "pr-105" "review: --dry-run purges nothing for the slug without review_dest"
 assert_eq 0 "$(calls rclone)" "review: --dry-run runs no rclone purge"
-assert_contains "$out" "worktree-prune: review: would purge 3 pr-* folder(s)" \
+assert_contains "$out" "worktree-prune: review: would purge 4 pr-* folder(s)" \
   "review: --dry-run summary reports the would-purge count"
 assert_file_present "$SBR/data/rev/wt/issue-1" "review: --dry-run removes no worktree"
 
@@ -232,6 +235,7 @@ assert_file_present "$SBR/data/rev/wt/issue-1" "review: --dry-run removes no wor
 reset_logs; echo 9 >"$LOGS/unmerged"
 echo 3 >"$LOGS/rc-102"   # pr-102 was never published: rclone's "directory not found"
 echo 1 >"$LOGS/rc-103"   # pr-103's purge fails outright
+echo nf1 >"$LOGS/rc-104" # pr-104 never published, real Dropbox wording: exit 1 + path_lookup/not_found/
 rc=0; out="$(PATH="$SHIMS:$PATH" "$WTR" --auto 2>&1)" || rc=$?
 RL="$(cat "$LOGS/rclone.log")"
 assert_rc 0 "$rc" "review: a failed purge leaves the exit status at 0" \
@@ -239,10 +243,14 @@ assert_rc 0 "$rc" "review: a failed purge leaves the exit status at 0" \
 assert_contains "$RL" "purge $RDEST/pr-101" "review: removing merged PR#101's worktree purges <review_dest>/pr-101"
 assert_eq "purge $RDEST/pr-101
 purge $RDEST/pr-102
-purge $RDEST/pr-103" "$(sort <<<"$RL")" \
+purge $RDEST/pr-103
+purge $RDEST/pr-104" "$(sort <<<"$RL")" \
   "review: exactly one purge per merged removal, each exactly <review_dest>/pr-<n> — nothing wider, nothing for the other slug"
 assert_contains "$out" "purged review folder $RDEST/pr-101" "review: a successful purge is reported"
 assert_not_contains "$out" "pr-102" "review: a missing folder (rclone exit 3) is a silent no-op"
+assert_not_contains "$out" "pr-104" "review: the real Dropbox missing folder (rclone exit 1 + path_lookup/not_found/) is a silent no-op"
+assert_not_contains "$out" "rclone exit 1): path_lookup" "review: no false '⚠ review purge failed' for path_lookup/not_found/"
+assert_file_absent "$SBR/data/rev/wt/issue-4" "review: the worktree is removed when rclone reports path_lookup/not_found/"
 assert_contains "$out" "⚠ review purge failed for $RDEST/pr-103 (rclone exit 1): ERROR : Failed to purge: permission denied" \
   "review: a failed purge prints a warning naming the folder"
 assert_file_absent "$SBR/data/rev/wt/issue-3" "review: the worktree is still removed when its purge fails"

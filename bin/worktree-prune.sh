@@ -193,8 +193,11 @@ remove_worktree() {  # <working_clone> <wt> <branch> <repo> [force]
 #
 # Scope guard: the target is always exactly `<dest>/pr-<n>`, and both halves are
 # validated first — an empty dest or a non-numeric n would widen `rclone purge` to the
-# whole review tree (or worse), so either one is a no-op. rclone's documented exit 3
-# ("directory not found") — or that phrase on stderr — is the silent missing-folder case.
+# whole review tree (or worse), so either one is a no-op. The silent missing-folder case
+# is rclone's documented exit 3 / "directory not found" AND what the real Dropbox backend
+# returns: verified on the DGX (rclone v1.75.1, `dropbox:` remote), `rclone purge
+# <missing>` exits 1 with `path_lookup/not_found/` on stderr. Either stderr phrase is
+# matched regardless of exit code; any other failure warns.
 # --dry-run reports `would purge` and runs nothing.
 # ---------------------------------------------------------------------------
 REVIEW_PURGED=0
@@ -212,7 +215,7 @@ purge_review() {
   err="$(rclone purge "$target" 2>&1 >/dev/null)" || rc=$?
   if [ "$rc" = 0 ]; then
     echo "  purged review folder $target"; REVIEW_PURGED=$((REVIEW_PURGED+1))
-  elif [ "$rc" = 3 ] || printf '%s' "$err" | grep -qi 'directory not found'; then
+  elif [ "$rc" = 3 ] || printf '%s' "$err" | grep -qiE 'directory not found|path_lookup/not_found'; then
     :   # nothing was published for this PR — silent
   else
     echo "  ⚠ review purge failed for $target (rclone exit $rc): $(printf '%s' "$err" | head -1)"
