@@ -194,6 +194,68 @@ assert_rc 0 "$rc" "--dry-run is accepted before the positionals"
 assert_eq 0 "$(calls rclone)" "--dry-run before the positionals still runs no rclone"
 
 # ===========================================================================
+# symlink containment — a path, or a symlink nested under it, whose REAL path is outside
+# the worktree or under its data/ is refused (exit 2, naming the link) before any rclone
+# call. `rclone sync -L` follows links: on the DGX a `report/link -> ../../../outside`
+# uploaded outside/secret.txt (issue #98 operator directive). Its own worktree (issue-8).
+# ===========================================================================
+WT8="$WTS/issue-8"
+mkdir -p "$SB/outside" "$SB/rawtree/raw" "$WT8/esc" "$WT8/intodata" "$WT8/esc-file" \
+  "$WT8/ok/assets" "$WT8/data/raw" "$WT8/viadir/sub" "$WT8/assets"
+echo 'SYNTHETIC secret' >"$SB/outside/secret.txt"
+echo 'SYNTHETIC raw' >"$WT8/data/raw/obs.csv"
+echo ok >"$WT8/assets/a.png"
+for d in esc intodata esc-file ok viadir; do echo '# report' >"$WT8/$d/index.md"; done
+ln -s ../../../../outside "$WT8/esc/link"            # nested, relative, escapes (the DGX case)
+ln -s ../data/raw "$WT8/intodata/raw"                # nested, into the worktree's data/
+ln -s "$SB/outside/secret.txt" "$WT8/esc-file/s.txt" # nested FILE link, absolute, escapes
+ln -s ../assets "$WT8/ok/img"                        # nested, stays inside: allowed
+ln -s ../../outside "$WT8/top-esc"                   # the path itself escapes
+ln -s ../../esc "$WT8/viadir/sub/hop"                  # reaches esc/link only through another link
+ln -s ../../../outside "$WT8/shadowed"               # (never named: only a path's tree is walked)
+
+for case in "esc esc/link resolves outside the worktree" \
+            "intodata intodata/raw resolves under data/" \
+            "esc-file esc-file/s.txt resolves outside the worktree" \
+            "top-esc top-esc resolves outside the worktree" \
+            "viadir viadir/sub/hop/link resolves outside the worktree"; do
+  set -- $case; p="$1" link="$2"; shift 2; why="$*"
+  for dry in "" --dry-run; do
+    reset_logs
+    rc=0; out="$(SHIM_HEAD=issue-8 "$PRV" demo 12 ok "$p" $dry 2>&1)" || rc=$?
+    assert_rc 2 "$rc" "symlink: '$p' ${dry:+($dry) }is refused with exit 2" \
+      "A path or nested symlink resolving outside the worktree or under data/ must be refused; rclone -L would upload its target."
+    assert_contains "$out" "refused '$p': $link $why" "symlink: '$p' ${dry:+($dry) }refusal names the link $link"
+    assert_eq 0 "$(calls rclone)" "symlink: '$p' ${dry:+($dry) }makes zero rclone calls (not even for the valid 'ok' path)"
+  done
+done
+assert_not_contains "$out" "secret" "symlink: the refusal never prints the escaped file's contents"
+
+# A link that stays inside the worktree publishes normally (no false positive), and the
+# check does not walk paths that were not named.
+reset_logs
+rc=0; out="$(SHIM_HEAD=issue-8 "$PRV" demo 12 ok 2>&1)" || rc=$?
+assert_rc 0 "$rc" "symlink: a nested link that stays inside the worktree publishes (exit 0)"
+assert_contains "$(cat "$LOGS/rclone.log")" "sync -L $WT8/ok $DEST/pr-12/ok" \
+  "symlink: the in-worktree link's directory is synced as usual"
+
+# A link cycle inside the tree terminates (it is not an escape).
+mkdir -p "$WT8/loop/a"; ln -s .. "$WT8/loop/a/up"
+reset_logs
+rc=0; out="$(SHIM_HEAD=issue-8 "$PRV" demo 12 loop --dry-run 2>&1)" || rc=$?
+assert_rc 0 "$rc" "symlink: an in-worktree link cycle terminates and is allowed"
+
+# data/ as a LINK to an outside data tree (the provisioned-worktree shape): a nested link
+# through it is refused as well.
+WT9="$WTS/issue-9"
+mkdir -p "$WT9/rep"; ln -s "$SB/rawtree" "$WT9/data"; ln -s ../data/raw "$WT9/rep/raw"
+reset_logs
+rc=0; out="$(SHIM_HEAD=issue-9 "$PRV" demo 12 rep 2>&1)" || rc=$?
+assert_rc 2 "$rc" "symlink: a nested link through a data/ symlink is refused with exit 2"
+assert_contains "$out" "refused 'rep': rep/raw" "symlink: the data/-symlink refusal names rep/raw"
+assert_eq 0 "$(calls rclone)" "symlink: the data/-symlink case makes zero rclone calls"
+
+# ===========================================================================
 # a non-dropbox destination publishes but reports no laptop path
 # ===========================================================================
 cat >"$SB/projects/other.yml" <<YML

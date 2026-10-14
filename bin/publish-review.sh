@@ -28,7 +28,8 @@
 #
 # Exit: 0 at least one path published (or review_dest unset — nothing to do)
 #       1 nothing published · unknown slug · no worktree · gh/rclone unavailable
-#       2 usage (no paths, non-numeric PR#, a rejected path)
+#       2 usage (no paths, non-numeric PR#, a rejected path — including a path or nested
+#         symlink whose real path is outside the worktree or under its data/)
 set -euo pipefail
 ORCH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -123,6 +124,61 @@ if [ -z "$DEST" ]; then
   echo "no review_dest for $SLUG; output is already local at $WT"
   exit 0
 fi
+
+# --- containment: every path, and every symlink under it, must stay in the worktree ----
+# `rclone -L` follows symlinks, so the lexical checks above are not enough: a link INSIDE
+# a published directory (`report/link -> ../../../outside`) was verified on the DGX to
+# upload `outside/` (issue #98). Resolve each existing path and walk it, following links
+# the way -L does; refuse (exit 2, naming the link) anything whose real path lies outside
+# the worktree or under its data/ — before any rclone call, --dry-run included.
+command -v python3 >/dev/null 2>&1 || { echo "publish-review: python3 not found; cannot check paths for escaping symlinks" >&2; exit 1; }
+crc=0
+python3 - "$WT" "${CLEAN[@]}" <<'PY' || crc=$?
+import os, sys
+wt = sys.argv[1]
+root = os.path.realpath(wt)
+# data/ is refused whether it is a real directory in the worktree or a link to the data tree
+banned = {os.path.join(root, "data"), os.path.realpath(os.path.join(wt, "data"))}
+
+def under(p, d):
+    return p == d or p.startswith(d.rstrip(os.sep) + os.sep)
+
+def bad(real):
+    if not under(real, root):
+        return "resolves outside the worktree"
+    if any(under(real, d) for d in banned):
+        return "resolves under data/"
+    return None
+
+def refuse(shown, link, real, why):
+    print("publish-review: refused '%s': %s %s (%s)" % (shown, link, why, real), file=sys.stderr)
+    sys.exit(2)
+
+for rel in sys.argv[2:]:
+    src = os.path.join(wt, rel)
+    if not os.path.lexists(src):
+        continue                      # reported as `skip <path>: not found` later
+    real = os.path.realpath(src)
+    why = bad(real)
+    if why:
+        refuse(rel, rel, real, why)
+    if not os.path.isdir(real):
+        continue
+    seen = set()
+    for d, dirs, files in os.walk(src, followlinks=True):
+        rd = os.path.realpath(d)
+        if rd in seen:                # a link cycle: do not walk it twice
+            dirs[:] = []
+            continue
+        seen.add(rd)
+        for name in dirs + files:
+            f = os.path.join(d, name)
+            if os.path.islink(f):
+                why = bad(os.path.realpath(f))
+                if why:
+                    refuse(rel, os.path.relpath(f, wt), os.path.realpath(f), why)
+PY
+[ "$crc" = 0 ] || exit "$crc"
 
 if [ "$DRY" = 0 ] && ! command -v rclone >/dev/null 2>&1; then
   echo "publish-review: rclone not found; cannot publish to $DEST" >&2; exit 1

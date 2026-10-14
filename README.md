@@ -296,10 +296,15 @@ rejections exit 2 with zero `gh` and `rclone` calls; an unknown slug, a failing 
 missing `<worktrees_dir>/<headRefName>` exit 1; an unset `review_dest` prints the
 already-local line with zero `rclone` calls; a directory goes through `sync -L` and a file
 through `copyto -L` into `<review_dest>/pr-<n>/<path>`; a missing path is skipped, and none
-published exits 1; the `dropbox:` → `~/Dropbox/` laptop path; `--dry-run` runs nothing; and
+published exits 1; a path or nested symlink resolving outside the worktree or under its
+`data/` (an escaping relative link, an absolute file link, a link reached only through
+another link, a link into `data/` whether `data/` is a directory or itself a link) exits 2
+naming the link with zero `rclone` calls, also under `--dry-run`, while an in-worktree link
+and a link cycle still publish; the `dropbox:` → `~/Dropbox/` laptop path; `--dry-run` runs nothing; and
 worktree-prune's copy of the `review_dest` reader is identical. `test-worktree-prune.sh`
 adds the **review purge**: one `rclone purge <review_dest>/pr-<n>` per merged removal and
-none for an unmerged worktree or a slug without the key, a missing folder silent, a failed
+none for an unmerged worktree or a slug without the key, a missing folder silent (exit 3 /
+`directory not found`, and the real Dropbox exit 1 + `path_lookup/not_found/`), a failed
 purge warned with the worktree still removed and exit 0, `--dry-run` purging nothing, and
 the no-`review_dest` output byte-identical to before.
 If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
@@ -645,6 +650,10 @@ dr publish-review <slug> 127 notes/_book            # e.g. a rendered Quarto boo
 - The worktree is `<worktrees_dir>/<headRefName>` of the PR. Paths are relative to it;
   absolute paths, `..` and anything at or under `data/` are refused (exit 2), because
   `-L` follows symlinks and `data/` would copy the linked raw tree.
+- For the same reason, a path **or any symlink nested under it** whose real path lies
+  outside the worktree or under its `data/` is refused (exit 2, naming the link), before
+  any `rclone` call and under `--dry-run` too. A `report/link -> ../../../outside` would
+  otherwise upload `outside/`. Links that stay inside the worktree are fine.
 - Each path **replaces** `<review_dest>/pr-<n>/<path>`: `rclone sync -L` for a directory,
   `rclone copyto -L` for a file, so files dropped in a later round don't survive a
   republish. A missing path prints `skip <path>: not found`; the exit is 0 if at least one
@@ -690,7 +699,8 @@ Interactive mode is unchanged — it leaves the tmux server alone entirely.
 **Review folders go with merged worktrees.** When either mode removes the worktree of a
 **merged** PR and the slug's manifest sets `review_dest`, it runs
 `rclone purge <review_dest>/pr-<n>` — that one folder, never anything wider. A folder
-that was never published is a silent no-op; a failed purge prints a `⚠ review purge
+that was never published is a silent no-op (rclone's exit 3 / `directory not found`, or
+the Dropbox backend's exit 1 with `path_lookup/not_found/`); a failed purge prints a `⚠ review purge
 failed for <folder>` line, and the worktree is still removed with the exit status
 unchanged. `--dry-run` prints `would purge <dest>/pr-<n>`. The tail gains
 `worktree-prune: review: purged N pr-* folder(s)` — only when some slug sets
