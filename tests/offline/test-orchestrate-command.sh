@@ -71,6 +71,27 @@ assert_contains "$BRIEF" "gh pr merge <n> -R <owner/repo> --squash --delete-bran
 assert_contains "$BRIEF" '(a "go" authorizes launches, never a merge)' \
   "…and a go still never authorizes a merge"
 
+# --- review publishing (issue #98) -------------------------------------------------
+assert_contains "$ALLOWED" "Bash(dr publish-review:*)" "dr publish-review is in allowed-tools"
+assert_not_contains "$ALLOWED" "rclone" "no rclone grant in allowed-tools" \
+  "Publishing goes through dr publish-review only; a raw rclone grant could copy or purge anything."
+assert_eq "" "$(grep -n 'rclone' "$CMD_FILE" || true)" "the command source never mentions rclone at all"
+PUB="$(awk '/^## Publishing review output/{on=1;next} on&&/^## /{exit} on' "$BRIEF_FILE")"
+assert_ne "" "$PUB" "brief has a 'Publishing review output' section"
+for s in 'a `checked-pass` PR you are surfacing as a merge decision' \
+         'a stop-and-ask on a ready PR' \
+         'whenever the operator asks you to' \
+         '**Never publish on mid-loop chaining rounds**' \
+         '*Key outputs*' \
+         'dr publish-review <slug> <pr#> <path>...' \
+         'laptop path it prints' \
+         '"nothing to publish"' \
+         'You never run `rclone` yourself'; do
+  assert_contains "$PUB" "$s" "brief publishing section: $s"
+done
+assert_contains "$CMD" 'dr publish-review <slug> <pr#> <path>...' "command body: names dr publish-review"
+assert_contains "$CMD" 'never on a mid-loop chaining' "command body: never publishes mid-loop"
+
 # --- path/token hygiene ------------------------------------------------------------
 assert_eq "" "$(grep -n '{{' "$BRIEF_FILE" || true)" "the brief stays token-free"
 assert_eq "{{DERAILLEUR_ROOT}}" "$(grep -o '{{[A-Z_]*}}' "$CMD_FILE" | sort -u | tr -d '\n')" \

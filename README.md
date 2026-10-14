@@ -290,6 +290,23 @@ their three-line synchronous output is unchanged; the printed pid is its own ses
 and process-group leader, with stdin `/dev/null`, stdout/stderr the dispatch log and no pipe
 on any fd; it survives a SIGTERM to the caller's process group and `finalize_dispatch`
 still flips the ledger status; and `--foreground` still tees the agent's output.
+The **review publisher** (`tests/offline/test-publish-review.sh`, issue #98), against
+logging `gh` and `rclone` shims: usage errors and the absolute / `..` / `data/`
+rejections exit 2 with zero `gh` and `rclone` calls; an unknown slug, a failing `gh` and a
+missing `<worktrees_dir>/<headRefName>` exit 1; an unset `review_dest` prints the
+already-local line with zero `rclone` calls; a directory goes through `sync -L` and a file
+through `copyto -L` into `<review_dest>/pr-<n>/<path>`; a missing path is skipped, and none
+published exits 1; a path or nested symlink resolving outside the worktree or under its
+`data/` (an escaping relative link, an absolute file link, a link reached only through
+another link, a link into `data/` whether `data/` is a directory or itself a link) exits 2
+naming the link with zero `rclone` calls, also under `--dry-run`, while an in-worktree link
+and a link cycle still publish; the `dropbox:` → `~/Dropbox/` laptop path; `--dry-run` runs nothing; and
+worktree-prune's copy of the `review_dest` reader is identical. `test-worktree-prune.sh`
+adds the **review purge**: one `rclone purge <review_dest>/pr-<n>` per merged removal and
+none for an unmerged worktree or a slug without the key, a missing folder silent (exit 3 /
+`directory not found`, and the real Dropbox exit 1 + `path_lookup/not_found/`), a failed
+purge warned with the worktree still removed and exit 0, `--dry-run` purging nothing, and
+the no-`review_dest` output byte-identical to before.
 If a real `orchestrator.conf` is present it also confirms *your* conf passes the guard
 and is byte-identical before/after.
 
@@ -371,6 +388,12 @@ into worktrees — is the research-repo standard defined by
    confidential or restricted-use tree — `--add-dir` scoping, not the deny-hook, is
    what keeps a worker out of one, so this key is the exact lever that would defeat
    that. See `templates/project.yml` for the warning and the worked example.
+   **Worktrees on a box you review from elsewhere (the DGX)?** Optionally set
+   `review_dest` to an rclone destination such as
+   `dropbox:projects/<area>-projects/<project>/review`; `dr publish-review` copies a
+   ready PR's rendered output to `<review_dest>/pr-<n>/` there (see *Publish a ready
+   PR's report for review* below). Unset means nothing is published, because the
+   output is already local; leave it unset on the laptop.
 4. Add the repo to the board + the "Needs Me" view (manual, GitHub Projects UI).
 5. **`dropbox-native` only:** pin the raw data "Available offline" in Dropbox
    (manual).
@@ -612,6 +635,40 @@ dr launch-checker <repo-slug> <pr#>    [--dry-run] [--foreground] [--budget USD]
 dr launch-worker solar-income 1 --budget 5 --foreground
 ```
 
+### Publish a ready PR's report for review
+
+Work done on the DGX renders output (a Quarto book, a `.md` report) that exists only in
+the DGX worktree. `dr publish-review` copies chosen paths from a PR's worktree to the
+repo's `review_dest` (manifest key, above), one folder per PR, so the laptop's Dropbox
+syncs it down:
+
+```bash
+dr publish-review <slug> <pr#> <path>... [--dry-run]
+dr publish-review <slug> 127 notes/_book            # e.g. a rendered Quarto book
+```
+
+- The worktree is `<worktrees_dir>/<headRefName>` of the PR. Paths are relative to it;
+  absolute paths, `..` and anything at or under `data/` are refused (exit 2), because
+  `-L` follows symlinks and `data/` would copy the linked raw tree.
+- For the same reason, a path **or any symlink nested under it** whose real path lies
+  outside the worktree or under its `data/` is refused (exit 2, naming the link), before
+  any `rclone` call and under `--dry-run` too. A `report/link -> ../../../outside` would
+  otherwise upload `outside/`. Links that stay inside the worktree are fine.
+- Each path **replaces** `<review_dest>/pr-<n>/<path>`: `rclone sync -L` for a directory,
+  `rclone copyto -L` for a file, so files dropped in a later round don't survive a
+  republish. A missing path prints `skip <path>: not found`; the exit is 0 if at least one
+  path was published and 1 if none was.
+- It prints the laptop location: a `dropbox:<rest>` destination maps to
+  `~/Dropbox/<rest>/pr-<n>/`.
+- With `review_dest` unset it prints `no review_dest for <slug>; output is already local
+  at <worktree>` and exits 0 without calling `rclone`.
+- `--dry-run` prints every `rclone` command and runs none.
+
+You rarely run it by hand: `/orchestrate` runs it when it hands you a ready PR (a
+`checked-pass` merge decision, or a stop-and-ask on a ready PR), choosing the paths from
+the PR's *Key outputs*, and puts the laptop path in its report. It never publishes on
+mid-loop chaining rounds. The folder is removed by `dr worktree-prune` (next section).
+
 ### Reclaim worktree disk
 
 ```bash
@@ -638,6 +695,18 @@ worktree-prune: tmux: reaped 1 dead derail-* sessions, left 1 alive
 ```
 
 Interactive mode is unchanged — it leaves the tmux server alone entirely.
+
+**Review folders go with merged worktrees.** When either mode removes the worktree of a
+**merged** PR and the slug's manifest sets `review_dest`, it runs
+`rclone purge <review_dest>/pr-<n>` — that one folder, never anything wider. A folder
+that was never published is a silent no-op (rclone's exit 3 / `directory not found`, or
+the Dropbox backend's exit 1 with `path_lookup/not_found/`); a failed purge prints a `⚠ review purge
+failed for <folder>` line, and the worktree is still removed with the exit status
+unchanged. `--dry-run` prints `would purge <dest>/pr-<n>`. The tail gains
+`worktree-prune: review: purged N pr-* folder(s)` — only when some slug sets
+`review_dest`, so a machine that never publishes sees exactly today's output and makes no
+`rclone` call. A PR **closed without merging** keeps its worktree, so its review folder
+persists too; delete it by hand if you want it gone.
 
 ### Day-to-day scheduler commands
 
@@ -735,6 +804,7 @@ derailleur/
 │   ├── config-common.sh           Loads operator identity from orchestrator.conf (sourced)
 │   ├── ledger-prune.sh            Reconcile, then drop, stale ledger entries at cycle start (`--dry-run` to plan)
 │   ├── worktree-prune.sh          Reclaim disk from merged/closed worktrees (+ reap dead derail-* tmux sessions)
+│   ├── publish-review.sh          Copy a ready PR's rendered output to <review_dest>/pr-<n>/
 │   ├── board-digest.sh            Deterministic board-state report (no LLM)
 │   ├── watch-dispatch.sh          Watch dispatched worker(s)/checker(s) to terminal state (local signals; no LLM)
 │   ├── round-cap.sh               Read-only round-cap check before an interactive follow-up dispatch

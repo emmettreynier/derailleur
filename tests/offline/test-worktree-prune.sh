@@ -139,3 +139,141 @@ else
       "run_auto's tmux summary must read like 'removed N, kept M' — see issue #53."
   fi
 fi
+
+# ===========================================================================
+# review-folder purge on merged removal (issue #98)
+#
+# A slug with `review_dest:` set gets `rclone purge <review_dest>/pr-<merged PR#>` when
+# --auto removes its merged worktree; a slug without it makes zero rclone calls and
+# prints exactly what it printed before the key existed. Real git worktrees (a bare
+# origin + clone, each issue-N branch pushed so it is clean and not ahead) and `gh` /
+# `rclone` PATH shims that log every call. The destination is a SYNTHETIC placeholder.
+# ===========================================================================
+GITC=(-c user.name=derailleur-test -c user.email=test@example.invalid -c commit.gpgsign=false)
+SHIMS="$(sandbox_tmp)"; LOGS="$(sandbox_tmp)"
+# gh: `pr list --head issue-N` -> merged PR (100+N) unless N is listed in $LOGS/unmerged;
+#     `issue view` -> CLOSED.
+cat >"$SHIMS/gh" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$LOGS/gh.log"
+case "\$1 \$2" in
+  "pr list")
+    h=""; prev=""
+    for a in "\$@"; do [ "\$prev" = --head ] && h="\$a"; prev="\$a"; done
+    n="\${h#issue-}"
+    grep -qx "\$n" "$LOGS/unmerged" 2>/dev/null || echo \$((100 + n)) ;;
+  "issue view") echo CLOSED ;;
+esac
+exit 0
+SH
+# rclone: logs argv; a purge of .../pr-<n> exits with the code in $LOGS/rc-<n> (if any),
+# printing rclone's own wording for the missing-directory case.
+cat >"$SHIMS/rclone" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$LOGS/rclone.log"
+t="\${!#}"; n="\${t##*/pr-}"
+rc=0; [ -f "$LOGS/rc-\$n" ] && rc="\$(cat "$LOGS/rc-\$n")"
+case "\$rc" in
+  0) ;;
+  3) echo "ERROR : Attempt 1/3 failed with 1 errors and: directory not found" >&2 ;;
+  # nf1: the REAL Dropbox missing-folder result the operator observed on the DGX
+  # (rclone v1.75.1): exit 1 with \`path_lookup/not_found/\` on stderr.
+  nf1) echo "path_lookup/not_found/" >&2; rc=1 ;;
+  *) echo "ERROR : Failed to purge: permission denied" >&2 ;;
+esac
+exit "\$rc"
+SH
+chmod +x "$SHIMS/gh" "$SHIMS/rclone"
+calls() { [ -f "$LOGS/$1.log" ] && wc -l <"$LOGS/$1.log" | tr -d ' ' || echo 0; }
+reset_logs() { : >"$LOGS/gh.log"; : >"$LOGS/rclone.log"; rm -f "$LOGS"/rc-* "$LOGS/unmerged"; }
+
+# build_project <orch> <slug> <issue#>... — a clone + worktrees dir for <slug> under <orch>,
+# one pushed, clean issue-N worktree per number, and its manifest (no review_dest).
+build_project() {
+  local orch="$1" slug="$2" base n; shift 2
+  base="$orch/data/$slug"
+  mkdir -p "$base/wt"
+  git init -q --bare "$base/origin.git"
+  git clone -q "$base/origin.git" "$base/clone" 2>/dev/null
+  git "${GITC[@]}" -C "$base/clone" commit -q --allow-empty -m init
+  git -C "$base/clone" push -q origin HEAD 2>/dev/null
+  for n in "$@"; do
+    git -C "$base/clone" worktree add -q -b "issue-$n" "$base/wt/issue-$n" 2>/dev/null
+    git -C "$base/wt/issue-$n" push -q -u origin "issue-$n" 2>/dev/null
+  done
+  cat >"$orch/projects/$slug.yml" <<YML
+repo: owner/$slug
+working_clone: $base/clone
+worktrees_dir: $base/wt
+YML
+}
+
+RDEST='dropbox:example-area/rev/review'
+SBR="$(new_sandbox)"
+sandbox_copy_script "$SBR" worktree-prune
+sandbox_copy_script "$SBR" dispatch-common
+build_project "$SBR" rev 1 2 3 4 9
+echo "review_dest: $RDEST   # synthetic" >>"$SBR/projects/rev.yml"
+build_project "$SBR" plain 5
+WTR="$SBR/bin/worktree-prune.sh"
+
+# --- --dry-run: reports `would purge`, runs no rclone, removes nothing --------------------
+reset_logs; echo 9 >"$LOGS/unmerged"
+rc=0; out="$(PATH="$SHIMS:$PATH" "$WTR" --auto --dry-run 2>&1)" || rc=$?
+assert_rc 0 "$rc" "review: --auto --dry-run exits 0 with review_dest set"
+for n in 1 2 3 4; do
+  assert_contains "$out" "would purge $RDEST/pr-10$n" "review: --dry-run reports would purge pr-10$n"
+done
+assert_not_contains "$out" "pr-109" "review: --dry-run never purges an UNMERGED PR's folder"
+assert_not_contains "$out" "pr-105" "review: --dry-run purges nothing for the slug without review_dest"
+assert_eq 0 "$(calls rclone)" "review: --dry-run runs no rclone purge"
+assert_contains "$out" "worktree-prune: review: would purge 4 pr-* folder(s)" \
+  "review: --dry-run summary reports the would-purge count"
+assert_file_present "$SBR/data/rev/wt/issue-1" "review: --dry-run removes no worktree"
+
+# --- real run: purge on merged removal, missing folder silent, failed purge warns -------
+reset_logs; echo 9 >"$LOGS/unmerged"
+echo 3 >"$LOGS/rc-102"   # pr-102 was never published: rclone's "directory not found"
+echo 1 >"$LOGS/rc-103"   # pr-103's purge fails outright
+echo nf1 >"$LOGS/rc-104" # pr-104 never published, real Dropbox wording: exit 1 + path_lookup/not_found/
+rc=0; out="$(PATH="$SHIMS:$PATH" "$WTR" --auto 2>&1)" || rc=$?
+RL="$(cat "$LOGS/rclone.log")"
+assert_rc 0 "$rc" "review: a failed purge leaves the exit status at 0" \
+  "purge_review must never fail the run; see bin/worktree-prune.sh."
+assert_contains "$RL" "purge $RDEST/pr-101" "review: removing merged PR#101's worktree purges <review_dest>/pr-101"
+assert_eq "purge $RDEST/pr-101
+purge $RDEST/pr-102
+purge $RDEST/pr-103
+purge $RDEST/pr-104" "$(sort <<<"$RL")" \
+  "review: exactly one purge per merged removal, each exactly <review_dest>/pr-<n> — nothing wider, nothing for the other slug"
+assert_contains "$out" "purged review folder $RDEST/pr-101" "review: a successful purge is reported"
+assert_not_contains "$out" "pr-102" "review: a missing folder (rclone exit 3) is a silent no-op"
+assert_not_contains "$out" "pr-104" "review: the real Dropbox missing folder (rclone exit 1 + path_lookup/not_found/) is a silent no-op"
+assert_not_contains "$out" "rclone exit 1): path_lookup" "review: no false '⚠ review purge failed' for path_lookup/not_found/"
+assert_file_absent "$SBR/data/rev/wt/issue-4" "review: the worktree is removed when rclone reports path_lookup/not_found/"
+assert_contains "$out" "⚠ review purge failed for $RDEST/pr-103 (rclone exit 1): ERROR : Failed to purge: permission denied" \
+  "review: a failed purge prints a warning naming the folder"
+assert_file_absent "$SBR/data/rev/wt/issue-3" "review: the worktree is still removed when its purge fails"
+assert_file_absent "$SBR/data/rev/wt/issue-2" "review: the worktree is removed when its folder was missing"
+assert_file_present "$SBR/data/rev/wt/issue-9" "review: an unmerged worktree is kept"
+assert_file_absent "$SBR/data/plain/wt/issue-5" "review: the slug without review_dest still has its merged worktree removed"
+assert_contains "$out" "worktree-prune: review: purged 1 pr-* folder(s)" \
+  "review: the summary tail counts only folders actually purged"
+
+# --- no slug sets review_dest: zero rclone calls, output unchanged from before #98 -------
+SBP="$(new_sandbox)"
+sandbox_copy_script "$SBP" worktree-prune
+sandbox_copy_script "$SBP" dispatch-common
+build_project "$SBP" plain 5
+reset_logs
+SHA5="$(git -C "$SBP/data/plain/clone" rev-parse --short issue-5)"
+rc=0; out="$(PATH="$SHIMS:$PATH" "$SBP/bin/worktree-prune.sh" --auto 2>&1)" || rc=$?
+assert_rc 0 "$rc" "review: --auto exits 0 with no review_dest anywhere"
+assert_eq 0 "$(calls rclone)" "review: a slug without review_dest makes zero rclone calls"
+# The pre-#98 output for this fixture, line for line (`Deleted branch` is git's own
+# stdout from remove_worktree's `branch -D`; no tmux server on the private socket by
+# now, so no tmux line either way).
+assert_eq "Deleted branch issue-5 (was $SHA5).
+  removed plain issue-5
+worktree-prune: removed 1, kept 0" "$out" \
+  "review: with no review_dest the prune output is unchanged (no review: line)"
