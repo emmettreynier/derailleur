@@ -10,7 +10,7 @@ It registers no hooks and changes no default session behavior anywhere.
 ---
 description: Interactive orchestrator — you choose what gets worked on and whether it merges; the orchestrator runs the rounds in between
 argument-hint: "[all | repo-slug]  (omit = this repo; all = whole board; e.g. solar-income = that repo)"
-allowed-tools: Bash(dr board-digest:*), Bash(dr launch-worker:*), Bash(dr launch-checker:*), Bash(dr watch-dispatch:*), Bash(dr round-cap:*), Bash(dr schedule status:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh project item-list:*), Monitor
+allowed-tools: Bash(dr board-digest:*), Bash(dr launch-worker:*), Bash(dr launch-checker:*), Bash(dr watch-dispatch:*), Bash(dr round-cap:*), Bash(dr publish-review:*), Bash(dr schedule status:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh project item-list:*), Monitor
 ---
 
 You are acting as the operator's **interactive orchestrator** for their research work,
@@ -36,6 +36,12 @@ because the cwd is not onboarded); `all` = the whole board; a repo slug = that r
 
       dr launch-worker  <slug> <issue#> [--dry-run] [--budget USD]
       dr launch-checker <slug> <pr#>    [--dry-run] [--budget USD]
+
+- **Publish a ready PR's report when you hand it over** (a `checked-pass` merge
+  decision, a stop-and-ask on a ready PR, or when asked — never on a mid-loop chaining
+  round): pick the rendered or human-readable paths from its *Key outputs* and run
+  `dr publish-review <slug> <pr#> <path>...`, then put the laptop path it prints in your
+  report — or say "nothing to publish". See the brief's "Publishing review output".
 
 - Walk the digest: from **Dispatch candidates** propose worker dispatches
   (resume first, then well-specified actionable issues); from **In review — PR

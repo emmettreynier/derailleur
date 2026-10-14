@@ -205,7 +205,7 @@ worktrees_dir: $base/wt
 YML
 }
 
-RDEST='dropbox:projects/example-projects/rev/review'
+RDEST='dropbox:example-area/rev/review'
 SBR="$(new_sandbox)"
 sandbox_copy_script "$SBR" worktree-prune
 sandbox_copy_script "$SBR" dispatch-common

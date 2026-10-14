@@ -147,6 +147,17 @@ raw_resolved: TODO              # raw tree data/raw points at; for a code-only r
 #     - ~/Dropbox/projects/<area>/<project>/data/download-script
 # Block-sequence form only (same shape as raw_paths/output_paths below). A trailing `#`
 # comment on an entry is stripped; blank lines and whole-line comments are tolerated.
+# review_dest: OPTIONAL scalar. An rclone destination where `dr publish-review` copies a
+# ready PR's rendered or human-readable output (a Quarto book, a .md report), one folder
+# per PR: <review_dest>/pr-<n>/<path>. UNSET means nothing is published: the output is
+# already local (e.g. the laptop, where the worktree sits next to you), and
+# publish-review just prints the worktree path. Set it on a machine with no Dropbox
+# client (the DGX), pointing at the rclone remote, so the laptop's Dropbox syncs the
+# folder down to ~/Dropbox/<rest>/pr-<n>/. `dr worktree-prune` purges <review_dest>/pr-<n>
+# when it removes the worktree of a MERGED PR; a PR closed without merging keeps its
+# worktree, and so its folder too. Machine-specific, like every path here — the real value
+# goes in projects/<slug>.yml only. Placeholder form:
+#   review_dest: dropbox:projects/<area>-projects/<project>/review
 dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "available offline"
 
 # dropbox_proj: OPTIONAL. Only for a repo that ships its own setup-symlinks.sh AND whose

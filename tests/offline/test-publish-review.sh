@@ -48,7 +48,7 @@ mkdir -p "$WT/notes/_book/sub" "$WT/data/raw"
 echo '<html>book</html>' >"$WT/notes/_book/index.html"
 echo 'page' >"$WT/notes/_book/sub/page.html"
 echo '# report' >"$WT/report.md"
-DEST='dropbox:projects/example-projects/demo/review'
+DEST='dropbox:example-area/demo/review'
 cat >"$SB/projects/demo.yml" <<YML
 repo: owner/demo
 worktrees_dir: $WTS
@@ -57,7 +57,7 @@ YML
 cat >"$SB/projects/local.yml" <<YML
 repo: owner/local
 worktrees_dir: $WTS
-# review_dest: dropbox:projects/never/read    (a commented-out key is unset)
+# review_dest: dropbox:never/read    (a commented-out key is unset)
 YML
 
 # ===========================================================================
@@ -144,7 +144,7 @@ assert_contains "$RL" "sync -L $WT/notes/_book $DEST/pr-12/notes/_book" \
 assert_contains "$RL" "copyto -L $WT/report.md $DEST/pr-12/report.md" \
   "a file is published with rclone copyto -L"
 assert_not_contains "$RL" "review//" "review_dest's trailing slash does not double up"
-assert_contains "$out" "on the laptop at: ~/Dropbox/projects/example-projects/demo/review/pr-12/" \
+assert_contains "$out" "on the laptop at: ~/Dropbox/example-area/demo/review/pr-12/" \
   "the laptop path maps dropbox:<rest> to ~/Dropbox/<rest>/pr-<n>/"
 
 # A trailing slash / leading ./ on the path is normalized, not passed through.
@@ -185,7 +185,7 @@ assert_contains "$out" "[dry-run] rclone sync -L $WT/notes/_book $DEST/pr-12/not
 assert_contains "$out" "[dry-run] rclone copyto -L $WT/report.md $DEST/pr-12/report.md" \
   "--dry-run prints the file copyto"
 assert_contains "$out" "skip missing.md: not found" "--dry-run still reports a missing path"
-assert_contains "$out" "~/Dropbox/projects/example-projects/demo/review/pr-12/" \
+assert_contains "$out" "~/Dropbox/example-area/demo/review/pr-12/" \
   "--dry-run still reports the laptop path"
 # --dry-run anywhere in argv, not only last.
 reset_logs
@@ -207,3 +207,14 @@ assert_rc 0 "$rc" "a non-dropbox review_dest publishes and exits 0"
 assert_contains "$(cat "$LOGS/rclone.log")" "copyto -L $WT/report.md s3:bucket/review/pr-3/report.md" \
   "a non-dropbox review_dest is used verbatim"
 assert_contains "$out" "not a dropbox: remote" "a non-dropbox review_dest says it has no laptop path"
+
+# ===========================================================================
+# the two review_dest readers stay identical (publish-review builds the publish target,
+# worktree-prune the purge target, from the same value) — see CLAUDE.md
+# ===========================================================================
+reader() { awk '/^review_dest_of\(\) \{/{on=1} on{print} on&&/^\}/{exit}' "$1"; }
+R1="$(reader "$REPO_ROOT/bin/publish-review.sh")"
+R2="$(reader "$REPO_ROOT/bin/worktree-prune.sh")"
+assert_ne "" "$R1" "publish-review.sh defines review_dest_of()"
+assert_eq "$R1" "$R2" "worktree-prune.sh carries an identical review_dest_of()" \
+  "Change both copies together: the purge must target the folder publish-review wrote."

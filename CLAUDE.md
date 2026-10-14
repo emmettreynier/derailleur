@@ -87,7 +87,11 @@ durability); this file does not repeat it, and it is *not* auto-loaded, so read 
   launchers (sed) and `manifest_scalar()` inside `bin/board-digest.sh`'s python heredoc
   (added for `board:`/`project:`, issue #86). It is a deliberate mirror — first
   `^key: value` line wins, a ` #comment` tail is stripped, one layer of quotes dropped —
-  so change it with the launchers, not on its own. (The *list* grammar's three
+  so change it with the launchers, not on its own. Another copy reads `review_dest:`
+  (issue #98): `yml()` + `review_dest_of()` in `bin/publish-review.sh`, duplicated in
+  `bin/worktree-prune.sh` (whose `yml()` was already a mirror). On top of the grammar,
+  `review_dest_of()` trims whitespace, reads a bare-comment value as unset and drops a
+  trailing `/` — keep the two copies identical, since the purge target is built from it. (The *list* grammar's three
   implementations are pinned against each other by
   `tests/offline/test-manifest-parser-conformance.sh`; the scalar one is not, because
   nothing safety-relevant reads a scalar through it — `board:` only picks an issue

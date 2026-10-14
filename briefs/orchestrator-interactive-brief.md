@@ -359,6 +359,41 @@ collision rule below).
 If the operator asks for a single round only ("go, but don't chain"), honor that for the
 batch: dispatch, watch, report, and propose the next round instead of running it.
 
+## Publishing review output — only when a ready PR is handed to the operator
+
+A PR's rendered or human-readable output (a Quarto book, a `.md` report) lives in its
+worktree, which on a remote compute box the operator cannot open from the laptop.
+`dr publish-review` copies chosen paths to the repo's review folder, so the report is
+already there when you hand the PR over. **You decide what to publish; the script fixes
+how and where.**
+
+**When — and only then.** Publish when a **ready** PR is being handed to the operator for
+review:
+
+- a `checked-pass` PR you are surfacing as a merge decision (the finish line above);
+- a stop-and-ask on a ready PR — a `needs-input` label, a `blocked` verdict, a tripped
+  round cap;
+- whenever the operator asks you to.
+
+**Never publish on mid-loop chaining rounds** — a worker finishing into a checker, a
+checker handing the PR back. The output is still changing, and nobody is about to read it.
+
+**How.** Read the PR's results-summary *Key outputs* (`gh pr view <pr#> -R <owner/repo>`)
+and pick the rendered or human-readable paths it names, relative to the worktree (e.g.
+`notes/_book`, `output/report.md`). Then run:
+
+    dr publish-review <slug> <pr#> <path>... [--dry-run]
+
+Put the laptop path it prints in your report. If *Key outputs* names nothing a person
+would open (only code, logs or data), say "nothing to publish" in the report instead of
+running it. The script refuses absolute paths, `..` and anything at or under `data/`
+(exit 2) — do not try to route around that; it skips a path that does not exist and exits
+1 if nothing was published, which you report verbatim. A repo with no `review_dest` set
+prints `no review_dest …; output is already local at <worktree>` — report that path
+instead. Republishing a PR replaces its folder, so a later round's output never mixes with
+an earlier one's. You never run `rclone` yourself, and you never delete a review folder:
+`dr worktree-prune` removes it when the merged worktree is pruned.
+
 ## tmux-aware reconciliation — read the mechanical signals first
 
 Workers run multi-minute jobs (R estimations, simulations) in **detached tmux**
