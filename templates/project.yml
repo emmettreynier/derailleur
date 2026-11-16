@@ -185,6 +185,21 @@ dropbox_pinned_offline: false   # set true (dropbox-native) once raw is pinned "
 # critical_paths gets no hard gate on its inputs (it never scaffolds data/raw) — declare
 # them here to gate it.
 
+# seed_renv_library: OPTIONAL, default ON (true). For a repo with an renv.lock, a fresh
+# `git worktree add` checkout has an EMPTY renv/library (renv gitignores it), so R in the
+# worktree has none of the pinned packages and a repo that gates its stages on
+# renv::status() stops at the first one. With this ON, bootstrap COPIES (never symlinks or
+# shares) <working_clone>/renv/library into <worktree>/renv/library before dispatch, for
+# workers and checkers alike — but only when the worktree has an renv.lock and its
+# renv/library is missing or empty; a reused worktree's non-empty library is left alone.
+# The copy is copy-on-write where the filesystem allows (`cp -a --reflink=auto` on Linux,
+# `cp -c` on macOS APFS), else a plain copy. A clone with no library, or a failed copy, is
+# one warning line and the dispatch continues: the repo's own renv check is the hard gate.
+# The launcher prints `renv library: seeded | reused | missing | …`. Repos without an
+# renv.lock are untouched whatever this says. Set false (or no/off/0) to opt out, e.g. when
+# the clone's library is huge and workers in this repo never run R:
+#   seed_renv_library: false
+
 # ── Confidentiality (READ before a live dispatch on a repo with confidential data) ──
 # The deny-hook blocks WRITES/DELETES under the raw prefixes below; it does NOT block
 # reads. READ-protection of sensitive data comes from --add-dir scoping: a worker can

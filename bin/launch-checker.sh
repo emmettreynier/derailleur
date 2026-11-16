@@ -127,6 +127,7 @@ while IFS= read -r _extra_read; do
 done < <(yml_list extra_read_resolved $'\n')
 DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
+SEED_RENV_LIBRARY="$(yml seed_renv_library)"     # optional; empty = default ON; false/no/off/0 = off (issue #108)
 
 # Same branch-(a) caveat as the worker (see launch-worker.sh). Note the label says WRITABLE
 # rather than RO: the checker drops Edit/Write and does not mutate BY POLICY, but it keeps
@@ -241,6 +242,12 @@ INFO
 INFO
     done
   fi
+  # renv seeding preview (issue #108): printed only when the tree has an renv.lock, so a
+  # non-renv repo's dry-run output is byte-identical to before.
+  RENV_PLAN="$(renv_seed_plan "$WORKTREE" "$WORKING_CLONE" "$SEED_RENV_LIBRARY")"
+  [ -n "$RENV_PLAN" ] && cat <<INFO
+#   renv library  : $RENV_PLAN
+INFO
   cat <<INFO
 #   machine env   : $MACHINE_ENV_FILE ($MACHINE_ENV_STATUS)   QUARTO_CHROMIUM=${QUARTO_CHROMIUM:-<unset>}
 #   tools         : Edit/Write/NotebookEdit DISABLED (checker = no mutation)
@@ -275,7 +282,7 @@ fi
 # the checker only ever created a single `data/raw -> raw_resolved` symlink and never ran
 # a repo's own setup-symlinks.sh, so for a multi-tree repo (california-pesticides) it
 # pointed data/raw at the whole data dir and left derived/ absent (issue #25).
-bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS" "$DERIVED_RESOLVED"
+bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS" "$DERIVED_RESOLVED" "$SEED_RENV_LIBRARY"
 
 # Belt-and-suspenders mutation baseline: capture the worktree's tracked-file state
 # before the checker runs; we re-check after, so an accidental write surfaces here
