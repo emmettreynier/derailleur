@@ -951,7 +951,107 @@ report_mutation() {
   fi
 }
 
-# bootstrap_worktree_data <worktree> <raw_resolved> <working_clone> <dropbox_proj> <slug> [critical_paths] [derived_resolved]
+# seed_renv_library <worktree> <working_clone> [seed_flag]   (issue #108)
+# A `git worktree add` checkout has an EMPTY renv/library (renv gitignores it), so R in a
+# fresh worker/checker worktree has none of the project's pinned packages, and a repo whose
+# make targets / .Rprofile stop on `renv::status()` being out of sync fails at its first
+# stage. A full renv::restore() per worktree is slow (it can build from source), so seed the
+# worktree's library from the working clone's.
+#
+# COPY, never share: a symlink or RENV_PATHS_LIBRARY pointing at the clone's library would
+# let a worker that installs/updates a package (or restores a branch's changed renv.lock)
+# mutate the main clone's pinned library. The copy is copy-on-write where the filesystem
+# supports it — `cp -a --reflink=auto` (GNU), `cp -c` (macOS APFS clonefile) — and a plain
+# recursive copy otherwise. It goes to a temp sibling and is renamed into place, so a
+# failed copy never leaves a half-populated library that the next dispatch would "reuse".
+#
+# Never fatal: every failure is ONE warning line and return 0 — the repo's own renv check
+# is the hard gate. Prints exactly one `renv library: …` line whenever the worktree has an
+# renv.lock (seeded / reused / missing / copy failed / not seeded); prints NOTHING when it
+# has none (repos without renv are untouched). <seed_flag> is the manifest's
+# seed_renv_library; empty means the default (on); false/no/off/0 turn it off.
+seed_renv_library() {
+  local worktree="$1" working_clone="$2" flag="${3:-}"
+  [ -f "$worktree/renv.lock" ] || return 0
+  case "$(printf '%s' "$flag" | tr '[:upper:]' '[:lower:]')" in
+    false|no|off|0)
+      echo "renv library: not seeded (seed_renv_library: $flag in the manifest)"
+      return 0 ;;
+  esac
+  local dst="$worktree/renv/library" src="$working_clone/renv/library"
+  if [ -n "$(ls -A "$dst" 2>/dev/null)" ]; then
+    echo "renv library: reused (worktree already has a non-empty renv/library)"
+    return 0
+  fi
+  if [ -z "$(ls -A "$src" 2>/dev/null)" ]; then
+    echo "⚠ renv library: missing — $src is absent or empty, so the worktree's renv/library was not seeded (run renv::restore() in the worktree, or in the clone to seed future dispatches)." >&2
+    return 0
+  fi
+  local tmp="$worktree/renv/.library-seed.$$" how=""
+  if ! mkdir -p "$worktree/renv" 2>/dev/null; then
+    echo "⚠ renv library: copy failed — could not create $worktree/renv; not seeded." >&2
+    return 0
+  fi
+  rm -rf "$tmp"
+  # GNU first (Linux): --reflink=auto clones on btrfs/XFS and silently copies elsewhere.
+  # BSD/macOS cp rejects both flags, so it falls through without touching anything.
+  if cp -a --reflink=auto "$src" "$tmp" 2>/dev/null; then
+    how="cp -a --reflink=auto"
+  else
+    rm -rf "$tmp"
+    if [ "$(uname -s)" = Darwin ] && cp -c -pR "$src" "$tmp" 2>/dev/null; then
+      how="cp -c, APFS clone"
+    else
+      rm -rf "$tmp"
+      if cp -pR "$src" "$tmp" 2>/dev/null; then
+        how="cp -pR, plain copy"
+      fi
+    fi
+  fi
+  if [ -z "$how" ]; then
+    rm -rf "$tmp"
+    echo "⚠ renv library: copy failed — could not copy $src into $dst; not seeded (the repo's renv check will stop the first stage; run renv::restore())." >&2
+    return 0
+  fi
+  # An empty leftover renv/library dir must go before the rename (mv onto an existing dir
+  # would nest the copy inside it). A non-empty one returned "reused" above.
+  if [ -e "$dst" ] && ! rmdir "$dst" 2>/dev/null; then
+    rm -rf "$tmp"
+    echo "⚠ renv library: copy failed — could not replace the empty $dst; not seeded." >&2
+    return 0
+  fi
+  if ! mv "$tmp" "$dst" 2>/dev/null; then
+    rm -rf "$tmp"
+    echo "⚠ renv library: copy failed — could not move the seeded copy into $dst; not seeded." >&2
+    return 0
+  fi
+  echo "renv library: seeded from $src ($how)"
+  return 0
+}
+
+# renv_seed_plan <worktree> <working_clone> [seed_flag]   (issue #108, dry-run only)
+# Read-only preview of what seed_renv_library would do, for the launchers' --dry-run
+# block (which exits before bootstrap). Judges the worktree when it already exists, else
+# the working clone it will be checked out from. Prints NOTHING when that tree has no
+# renv.lock, so a non-renv repo's dry-run stays byte-identical to before the key existed.
+renv_seed_plan() {
+  local worktree="$1" working_clone="$2" flag="${3:-}" tree
+  if [ -d "$worktree" ]; then tree="$worktree"; else tree="$working_clone"; fi
+  [ -f "$tree/renv.lock" ] || return 0
+  case "$(printf '%s' "$flag" | tr '[:upper:]' '[:lower:]')" in
+    false|no|off|0) echo "off (seed_renv_library: $flag)"; return 0 ;;
+  esac
+  if [ -d "$worktree" ] && [ -n "$(ls -A "$worktree/renv/library" 2>/dev/null)" ]; then
+    echo "would reuse the worktree's non-empty renv/library"
+  elif [ -n "$(ls -A "$working_clone/renv/library" 2>/dev/null)" ]; then
+    echo "would seed from $working_clone/renv/library (copy, not shared)"
+  else
+    echo "MISSING — $working_clone/renv/library is absent or empty; would warn and not seed"
+  fi
+  return 0
+}
+
+# bootstrap_worktree_data <worktree> <raw_resolved> <working_clone> <dropbox_proj> <slug> [critical_paths] [derived_resolved] [seed_renv_library]
 # Provision a fresh worktree's machine-local (gitignored) data dirs BEFORE dispatch.
 # <critical_paths> (optional, 6th arg) is a comma-separated list of worktree-relative
 # paths a manifest declares load-bearing (issue #43); the gate below asserts every one.
@@ -985,10 +1085,14 @@ report_mutation() {
 # itself; when raw_resolved resolves to the same real path as working_clone there is NO
 # distinct data tree, so scaffolding a self-referential data/raw symlink is spurious
 # untracked cruft (it blocks worktree-prune --auto on merged worktrees) — skip it.
+# RENV: before any data link, seed_renv_library (above, issue #108) copies the clone's
+# renv/library into a worktree that has an renv.lock and an empty library; the 8th arg is
+# the manifest's seed_renv_library flag. It runs first and never fails the dispatch.
 bootstrap_worktree_data() {
   local worktree="$1" raw_resolved="$2" working_clone="$3" dropbox_proj="$4" slug="$5"
   local critical_paths="${6:-}"   # comma-separated, relative to the worktree root (issue #43)
   local derived_resolved="${7:-}" # optional shared writable derived tree (hub #38); unset = no-op
+  seed_renv_library "$worktree" "$working_clone" "${8:-}"
   local raw_real clone_real own_script=0
   raw_real="$(cd "$raw_resolved" 2>/dev/null && pwd -P || echo "")"
   clone_real="$(cd "$working_clone" 2>/dev/null && pwd -P || echo "")"

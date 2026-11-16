@@ -135,6 +135,7 @@ done < <(yml_list extra_read_resolved $'\n')
 DROPBOX_PROJ="$(expand "$(yml dropbox_proj)")"   # optional; empty = let the repo's setup-symlinks.sh default it
 OUTPUT_PATHS="$(yml_list output_paths)"
 CRITICAL_PATHS="$(yml_list critical_paths)"      # optional; comma-separated worktree-relative gate paths (issue #43)
+SEED_RENV_LIBRARY="$(yml seed_renv_library)"     # optional; empty = default ON; false/no/off/0 = off (issue #108)
 
 # derived_resolved only takes effect on the DEFAULT bootstrap path. A repo that ships its
 # own setup-symlinks.sh owns its entire data/ layout, data/derived included, so the key is
@@ -304,6 +305,12 @@ INFO
 INFO
     done
   fi
+  # renv seeding preview (issue #108): printed only when the tree has an renv.lock, so a
+  # non-renv repo's dry-run output is byte-identical to before.
+  RENV_PLAN="$(renv_seed_plan "$WORKTREE" "$WORKING_CLONE" "$SEED_RENV_LIBRARY")"
+  [ -n "$RENV_PLAN" ] && cat <<INFO
+#   renv library  : $RENV_PLAN
+INFO
   cat <<INFO
 #   machine env   : $MACHINE_ENV_FILE ($MACHINE_ENV_STATUS)   QUARTO_CHROMIUM=${QUARTO_CHROMIUM:-<unset>}
 #   outputs       : $OUTPUT_PATHS
@@ -340,7 +347,7 @@ fi
 # bootstrap_worktree_data (dispatch-common.sh) so both provision identical links —
 # see that function for the full rationale (issue #25: the DROPBOX_PROJ derivation
 # that doubled california-pesticides' path segment, and the missing --worker flag).
-bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS" "$DERIVED_RESOLVED"
+bootstrap_worktree_data "$WORKTREE" "$RAW_RESOLVED" "$WORKING_CLONE" "$DROPBOX_PROJ" "$REPO_SLUG" "$CRITICAL_PATHS" "$DERIVED_RESOLVED" "$SEED_RENV_LIBRARY"
 
 # Ledger: local execution state GitHub doesn't record. `pid` lets the digest
 # tell a live worker from a crashed one; `status` (dispatched/done/failed) is

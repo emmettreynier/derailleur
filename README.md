@@ -282,6 +282,14 @@ zero, reuses the shared counters, and makes only comment *reads*
 description/hint, `dr round-cap` in `allowed-tools`, no `gh pr merge` there, the
 `--here` injection, the chaining contract, every stop condition with `incomplete-waiting`
 excluded, and the unchanged merge section (`test-orchestrate-command.sh`).
+The **renv library seed** (`tests/offline/test-renv-seed.sh`, issue #108), against synthetic
+package dirs: an renv worktree with a missing or empty `renv/library` is seeded as a real
+copy (not a symlink; a write into it leaves the clone's untouched; nested symlinks kept);
+a non-empty library is reused, not re-copied or merged, and a second dispatch reports
+reuse; a clone with no library and a failing copy (a `cp` shim) each print one warning,
+exit 0 and leave no partial library; a repo with no `renv.lock` gets no `renv/` and no
+output; `seed_renv_library: false|no|off|0` seeds nothing; and both launchers forward the
+key and print a `renv library` dry-run line only for an renv repo.
 The **detached launch's fds** (`tests/offline/test-detach-fds.sh`, issue #100): with a
 stub `claude` that sleeps 20 s, a real (non-dry-run) `launch-worker` and `launch-checker`
 piped into `cat` and captured via `$(…)` each return within a few seconds and print the pid
@@ -388,6 +396,11 @@ into worktrees — is the research-repo standard defined by
    confidential or restricted-use tree — `--add-dir` scoping, not the deny-hook, is
    what keeps a worker out of one, so this key is the exact lever that would defeat
    that. See `templates/project.yml` for the warning and the worked example.
+   **An renv repo?** Nothing to set: when a worktree has an `renv.lock` and an empty
+   `renv/library`, bootstrap **copies** the working clone's `renv/library` into it
+   (copy-on-write where the filesystem allows; never a symlink, so a worker can't mutate
+   the clone's pinned packages) and prints `renv library: seeded | reused | missing`.
+   `seed_renv_library: false` opts a repo out (issue #108).
    **Worktrees on a box you review from elsewhere (the DGX)?** Optionally set
    `review_dest` to an rclone destination such as
    `dropbox:projects/<area>-projects/<project>/review`; `dr publish-review` copies a
